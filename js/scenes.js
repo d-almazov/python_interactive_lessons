@@ -4,7 +4,7 @@ function readPal(){
   const cs=getComputedStyle(document.documentElement);
   ["sc-sky","sc-floor","sc-metal","sc-metal2","sc-belt","sc-glass","sc-leaf","sc-pot","sc-road","sc-mars","sc-marssky","sc-hill","p-red","p-blue","p-green","p-yellow","ink","muted","accent","ok","bad","warn","panel","line","bg","code-bg"].forEach(n=>{ PAL[n.replace(/-/g,"_")]=cs.getPropertyValue("--"+n).trim()||"#888"; });
 }
-const FB='"IBM Plex Sans", system-ui, sans-serif', FM='"JetBrains Mono", ui-monospace, monospace', FD='"Russo One", "Arial Black", sans-serif';
+const FB='"Onest", system-ui, sans-serif', FM='"JetBrains Mono", ui-monospace, monospace', FD='"Unbounded", "Onest", sans-serif';
 const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
 const lerp=(a,b,t)=>a+(b-a)*t;
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -87,7 +87,7 @@ SCENES.green={
     if(v.is_night){ c.fillStyle="rgba(10,20,45,.18)"; c.fillRect(0,0,640,330); circ(c,60,48,14,P.p_yellow); circ(c,67,43,12,P.sc_sky); }
     // пульт
     const X=420,Y=24,Wd=200,H=330; panel(c,X,Y,Wd,H);
-    T(c,"ПУЛЬТ ТЕПЛИЦІ",X+16,Y+24,{f:FD,s:13,w:400});
+    T(c,"ПУЛЬТ ТЕПЛИЦІ",X+16,Y+24,{f:FD,s:12,w:600});
     let yy=Y+56;
     const fmt={humidity:["Вологість",v.humidity+" %"],temp:["Температура",v.temp+" °C"],light:["Освітленість",v.light+" лк"],is_night:["Час доби",v.is_night?"ніч":"день"]};
     for(const r of st.lv.readouts){ T(c,fmt[r][0],X+16,yy,{s:12,w:500,c:P.muted}); T(c,fmt[r][1],X+Wd-16,yy,{s:15,w:600,f:FM,a:"right"}); yy+=28; }
@@ -275,7 +275,7 @@ SCENES.belt={
       c.restore();
       const fl=a&&a.ev.t==="stop"?(Math.sin(a.p*25)>0?1:.4):1;
       rr(c,150,BELT_Y-62,250,28,6); c.fillStyle=alpha(P.bad,fl); c.fill();
-      T(c,"АВАРІЙНА ЗУПИНКА",275,BELT_Y-48,{f:FD,s:13,w:400,c:"#fff",a:"center"});
+      T(c,"АВАРІЙНА ЗУПИНКА",275,BELT_Y-48,{f:FD,s:12,w:600,c:"#fff",a:"center"});
     }
     T(c,"ВХІД",14,BELT_Y-38,{s:10,w:700,c:P.muted});
   }
