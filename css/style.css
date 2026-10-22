@@ -190,8 +190,13 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .task{background:var(--surface-muted);border:1px solid var(--line);border-radius:var(--radius);padding:16px 20px}
 .task h2{display:flex;align-items:center;gap:.45rem;font-size:13px;font-weight:600;letter-spacing:0;color:var(--muted);margin-bottom:8px}
 .task h2::before{content:"";width:.45rem;height:.45rem;border-radius:50%;background:var(--ink)}
-.task ul{margin:0;padding-left:18px}
-.task li{margin-bottom:4px}
+.task ol{margin:0;padding-left:22px}
+.task li{margin-bottom:8px;padding-left:2px}
+.task li:last-child{margin-bottom:0}
+.task li::marker{color:var(--muted);font-weight:600;font-size:.92em}
+.api-note{margin:2px 0 6px;font-size:13px;color:var(--muted)}
+.api-tr{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:var(--muted)}
+.api-tr i{font-style:normal;font-family:var(--f-mono);font-size:.95em;color:var(--ink)}
 .api summary{cursor:pointer;font-weight:600;font-size:14px;padding:4px 0}
 .api table{font-size:13.5px}
 .api td:first-child{white-space:nowrap;width:1%}

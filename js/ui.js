@@ -356,8 +356,8 @@ function renderLevel(lv){
     <div class="lv-grid">
       <div class="lv-brief">
         <p class="brief">${lv.brief}</p>
-        <div class="task"><h2>Завдання</h2><ul>${lv.task.map(t=>"<li>"+t+"</li>").join("")}</ul></div>
-        <details class="api" open><summary>Команди обладнання</summary><div class="tbl-wrap"><table>${lv.api.map(([a,b])=>"<tr><td><code>"+esc(a)+"</code></td><td>"+b+"</td></tr>").join("")}</table></div></details>
+        <div class="task"><h2>Завдання</h2><ol>${lv.task.map(t=>"<li>"+t+"</li>").join("")}</ol></div>
+        <details class="api" open><summary>Команди обладнання</summary><p class="api-note">Назви команд узяті з англійської. Під кожним описом є переклад, так їх легше запам'ятати.</p><div class="tbl-wrap"><table>${lv.api.map(([a,b,tr])=>"<tr><td><code>"+esc(a)+"</code></td><td>"+b+(tr?'<span class="api-tr">'+tr+"</span>":"")+"</td></tr>").join("")}</table></div></details>
       </div>
       <div class="lv-scene">
         <div class="scene-wrap"><canvas id="scene" aria-label="Анімація станції"></canvas></div>
