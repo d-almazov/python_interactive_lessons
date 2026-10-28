@@ -157,6 +157,10 @@ td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 .run-hint{font-size:12px;color:var(--muted);margin-left:auto}
 .run-out{margin:0;padding:12px 14px;border-top:1px solid var(--line);font:13px/1.55 var(--f-mono);background:var(--code-bg);white-space:pre-wrap;word-break:break-word}
 .run-out.has-err{color:var(--bad)}
+.run-files{display:flex;gap:10px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--surface-muted)}
+.run-file{flex:1 1 180px;min-width:0;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--panel);overflow:hidden}
+.run-file-h{font:600 12px/1 var(--f-mono);color:var(--muted);padding:7px 10px;border-bottom:1px solid var(--line)}
+.run-file pre{margin:0;padding:8px 10px;font:12.5px/1.5 var(--f-mono);white-space:pre-wrap;word-break:break-word;color:var(--ink)}
 .theory-next{display:flex;gap:10px;flex-wrap:wrap;margin-top:40px;padding-top:24px;border-top:1px solid var(--line)}
 
 /* редактор */

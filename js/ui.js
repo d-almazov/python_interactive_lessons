@@ -1,18 +1,26 @@
 /* ============ UI ============ */
 const $=(s,r=document)=>r.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[ch]));
-const CHAPTERS={1:"Умови",2:"Цикл for",3:"Цикл while",4:"Винятки",5:"Фінал"};
+const CHAPTERS={1:"Умови",2:"Цикл for",3:"Цикл while",4:"Винятки",5:"Функції",6:"Файли",7:"Фінал"};
+const FINAL=7;
 
 /* ---------- збереження ---------- */
-const STORE_KEY="robocex-v1";
+const STORE_KEY="robocex-v2";
 let SAVE={done:{},code:{},hints:{},sol:{}};
-try{ const s=JSON.parse(localStorage.getItem(STORE_KEY)||"null"); if(s&&typeof s==="object") SAVE=Object.assign(SAVE,s); }catch(_){}
+try{
+  let s=JSON.parse(localStorage.getItem(STORE_KEY)||"null");
+  if(!s){ // у v1 «Міні-завод» мав id st-14; тепер це st-24, а st-14 — нова станція
+    const old=JSON.parse(localStorage.getItem("robocex-v1")||"null");
+    if(old&&typeof old==="object"){ for(const k of ["done","code","hints","sol"]) if(old[k]&&"st-14" in old[k]){ old[k]["st-24"]=old[k]["st-14"]; delete old[k]["st-14"]; } s=old; }
+  }
+  if(s&&typeof s==="object") SAVE=Object.assign(SAVE,s);
+}catch(_){}
 function persist(){ try{ localStorage.setItem(STORE_KEY,JSON.stringify(SAVE)); }catch(_){} }
 
 /* ---------- підсвітка Python ---------- */
 const KW=new Set("if elif else for while in not and or try except finally break continue pass True False None def return import from as raise class with lambda is".split(" "));
-const BI=new Set("print range len int float str list abs min max round sum enumerate type".split(" "));
-const API=new Set("robot rover conveyor arm sensor display motor scanner part jobs".split(" "));
+const BI=new Set("print range len int float str list abs min max round sum enumerate type open".split(" "));
+const API=new Set("robot rover conveyor arm sensor display motor scanner part jobs results events days item steps".split(" "));
 function highlight(src){
   const re=/(#[^\n]*)|("(?:[^"\\\n]|\\.)*"?|'(?:[^'\\\n]|\\.)*'?)|(\b\d+(?:\.\d+)?\b)|([A-Za-z_Ѐ-ӿ][\wЀ-ӿ]*)|([^\w#"'Ѐ-ӿ]+|.)/g;
   let out="",m;
@@ -234,6 +242,112 @@ except ValueError as e:
   ["table",[["Виняток","Коли виникає"],["ValueError","значення неправильне: int(\"abc\")"],["TypeError","операція з невідповідним типом: 5 + \"5\""],["ZeroDivisionError","ділення на нуль"],["IndexError","індекс поза межами списку"],["NameError","змінну не створено"],["SensorError, OverheatError, JamError, ScanError","винятки обладнання в завданнях практикуму"]]],
   ["note","Не пиши порожній <code>except:</code> без типу. Він перехоплює все підряд і ховає справжні помилки в коді."]
   ]
+},
+{ id:"teoria-funktsii", nav:"Функції", title:"Функції", lead:"Коли той самий шматок коду потрібен кілька разів, його не копіюють, а дають йому назву. Такий іменований шматок програми називають функцією. Чужими функціями ви вже користувалися: <code>print()</code>, <code>range()</code>, <code>robot.forward()</code>. У цьому розділі ви писатимете власні.",
+  body:[
+  ["h","Визначення і виклик"],
+  ["p","Функцію визначають словом <code>def</code>, після якого стоять назва, дужки й двокрапка. Рядки з відступом під ним утворюють <b>тіло</b> функції. Python запам'ятовує тіло, але виконує його лише тоді, коли функцію викликають: пишуть її назву з дужками, наприклад <code>greet()</code>."],
+  ["code",`def greet():
+    print("Привіт!")
+    print("Станція готова до роботи.")
+
+greet()
+greet()`],
+  ["p","Сам рядок <code>def</code> нічого не друкує. Обидва повідомлення з'являються двічі, бо функцію викликано двічі."],
+  ["h","Параметри"],
+  ["p","Щоб функція працювала з різними даними, у дужках після її назви перелічують <b>параметри</b>. Під час виклику на їхнє місце стають конкретні значення, <b>аргументи</b>, у тому самому порядку."],
+  ["code",`def place_row(y, count):
+    for x in range(count):
+        print("ящик на позиції", x, "у ряду", y)
+
+place_row(0, 3)
+place_row(1, 2)`],
+  ["p","У першому виклику <code>y</code> дорівнює 0, а <code>count</code> — 3. У другому <code>y</code> дорівнює 1, а <code>count</code> — 2."],
+  ["h","return повертає результат"],
+  ["p","Команда <code>return</code> завершує функцію й передає значення туди, звідки функцію викликали. Це значення можна записати в змінну, порівняти або передати іншій функції."],
+  ["code",`def status(t):
+    if t > 26:
+        return "HIGH"
+    if t < 18:
+        return "LOW"
+    return "OK"
+
+s = status(30)
+print("30 градусів:", s)
+print("20 градусів:", status(20))`],
+  ["p","Щойно Python виконав <code>return</code>, функція закінчується, і рядки під ним уже не виконуються. Тому останній <code>return</code> спрацює лише тоді, коли обидві умови вище хибні."],
+  ["h","print і return"],
+  ["p","<code>print</code> показує текст людині в консолі, а <code>return</code> віддає значення програмі. Функція без <code>return</code> повертає <code>None</code>, тобто «нічого»."],
+  ["code",`def double_print(x):
+    print(x * 2)
+
+def double_return(x):
+    return x * 2
+
+a = double_print(5)
+b = double_return(5)
+print("a =", a)
+print("b =", b)`],
+  ["p","Обидві функції порахували 10, але в змінну <code>a</code> потрапило <code>None</code>. Чи лежить у змінній <code>None</code>, перевіряють так: <code>if a is None:</code>."],
+  ["h","Локальні змінні"],
+  ["p","Змінна, створена всередині функції, існує лише під час її виклику. Ззовні її не видно, і вона не чіпає змінну з такою самою назвою в решті програми."],
+  ["code",`total = 100
+
+def count_boxes():
+    total = 5
+    print("усередині функції:", total)
+
+count_boxes()
+print("поза функцією:", total)`],
+  ["h","Типові помилки"],
+  ["list",["Виклик без дужок: <code>greet</code> лише називає функцію, а виконує її <code>greet()</code>.","Виклик стоїть вище за <code>def</code>. Python ще не знає такої функції, і виникає <code>NameError</code>.","<code>print</code> замість <code>return</code>: результат видно в консолі, а програма отримує <code>None</code>.","У виклику інша кількість аргументів, ніж параметрів у <code>def</code>, і виникає <code>TypeError</code>."]]
+  ]
+},
+{ id:"teoria-faily", nav:"Файли", title:"Робота з файлами", lead:"Змінні зникають, щойно програма закінчується. Щоб дані дожили до наступного запуску або дісталися іншій людині чи програмі, їх записують у файл. Файли в цьому розділі віртуальні й живуть просто на сторінці, але команди для них ті самі, що й у звичайному Python.",
+  body:[
+  ["h","Відкрити, прочитати, закрити"],
+  ["p","<code>open(\"назва\")</code> відкриває файл для читання й повертає об'єкт файлу. Цикл <code>for line in f:</code> перебирає його рядки по одному. Коли файл більше не потрібен, його закривають: <code>f.close()</code>. Над редактором показано, що лежить у файлі до запуску."],
+  ["code",`f = open("temps.txt")
+for line in f:
+    print("рядок:", line)
+f.close()`,{files:{"temps.txt":"21.5\n22.0\n23.4\n"}}],
+  ["p","Між рядками в консолі з'являються порожні. Кожен рядок файлу закінчується невидимим символом перенесення <code>\\n</code>, а <code>print</code> додає від себе ще один."],
+  ["h","Розбір рядка: strip, split, int"],
+  ["table",[["Вираз","Результат"],["\"  21.5\\n\".strip()","\"21.5\": пробіли й \\n з країв прибрано"],["\"12;болт\".split(\";\")","[\"12\", \"болт\"]"],["int(\"12\")","12"],["float(\"21.5\")","21.5"]]],
+  ["code",`total = 0
+f = open("invoice.txt")
+for line in f:
+    parts = line.strip().split(";")
+    print(parts)
+    if parts[1] == "болт":
+        total += int(parts[0])
+f.close()
+print("Болтів:", total)`,{files:{"invoice.txt":"12;болт\n5;гайка\n8;болт\n"}}],
+  ["h","Запис: режими w і a"],
+  ["p","Щоб писати у файл, другим аргументом <code>open</code> передають режим."],
+  ["table",[["Режим","Що робить"],["\"r\"","читання; цей режим діє, якщо другого аргументу немає"],["\"w\"","запис з чистого аркуша: старий вміст зникає одразу після відкриття"],["\"a\"","дописування в кінець; старий вміст лишається"]]],
+  ["p","Метод <code>write</code> записує лише текст і сам рядок не переносить. Тому число спершу перетворюють через <code>str()</code>, а в кінці рядка дописують <code>\\n</code>."],
+  ["code",`f = open("log.txt", "a")
+f.write("09:15 ALARM\\n")
+f.write("Усього подій: " + str(2) + "\\n")
+f.close()`,{files:{"log.txt":"08:00 START\n"}}],
+  ["p","Під виводом видно, що лежить у файлі після запуску. Заміни <code>\"a\"</code> на <code>\"w\"</code> і порівняй."],
+  ["h","with закриває файл сам"],
+  ["p","Записаний текст спершу збирається в буфері, а у файл гарантовано потрапляє під час закриття. Хто забув <code>close()</code>, той ризикує втратити дані. Конструкція <code>with</code> закриває файл сама, щойно закінчується її блок, навіть якщо всередині сталася помилка."],
+  ["code",`with open("report.txt", "w") as f:
+    f.write("Звіт\\n")
+    f.write("усе гаразд\\n")
+print("Файл закрито:", f.closed)`,{files:{}}],
+  ["h","Коли файлу немає"],
+  ["p","Якщо файлу, який треба прочитати, немає, <code>open</code> кидає <code>FileNotFoundError</code>. Перехоплюють його так само, як інші винятки."],
+  ["code",`for name in ["day1.txt", "day2.txt"]:
+    try:
+        with open(name) as f:
+            print(name, "прочитано, рядків:", len(f.readlines()))
+    except FileNotFoundError:
+        print(name, "не знайдено")`,{files:{"day1.txt":"5\n7\n"}}],
+  ["note","У справжньому Python файли лежать на диску поруч із програмою. Тут вони віртуальні: після кожного запуску приклад починається з тих самих файлів."]
+  ]
 }
 ];
 
@@ -244,7 +358,7 @@ function buildNav(){
   h+='<div class="nav-group"><div class="nav-h">Теорія</div>'+TH.map(t=>'<a href="#'+t.id+'" data-v="'+t.id+'">'+t.nav+"</a>").join("")+"</div>";
   let ch=0;
   LEVELS.forEach(l=>{
-    if(l.ch!==ch){ if(ch) h+="</div>"; ch=l.ch; h+='<div class="nav-group"><div class="nav-h">'+(ch<5?"Розділ "+ch+" · ":"")+CHAPTERS[ch]+"</div>"; }
+    if(l.ch!==ch){ if(ch) h+="</div>"; ch=l.ch; h+='<div class="nav-group"><div class="nav-h">'+(ch<FINAL?"Розділ "+ch+" · ":"")+CHAPTERS[ch]+"</div>"; }
     const s=SAVE.done[l.id]||0;
     h+='<a href="#'+l.id+'" data-v="'+l.id+'" class="nav-lv"><span class="nav-num">'+String(l.n).padStart(2,"0")+'</span><span class="nav-t">'+l.title+'</span><span class="nav-stars'+(s?" on":"")+'" aria-label="'+(s?s+" зірки":"не пройдено")+'">'+(s?"★".repeat(s):"")+"</span></a>";
   });
@@ -276,16 +390,16 @@ window.addEventListener("hashchange",route);
 /* ---------- домівка ---------- */
 function renderHome(){
   let map="";
-  for(let ch=1;ch<=5;ch++){
+  for(let ch=1;ch<=FINAL;ch++){
     const ls=LEVELS.filter(l=>l.ch===ch);
-    map+='<div class="ch-card"><div class="ch-head"><span class="ch-n">'+(ch<5?"РОЗДІЛ "+ch:"ФІНАЛ")+'</span><h3>'+CHAPTERS[ch]+'</h3></div><ul class="ch-list">'+ls.map(l=>{ const s=SAVE.done[l.id]||0; return '<li><a href="#'+l.id+'"><span class="nav-num">'+String(l.n).padStart(2,"0")+"</span>"+l.title+'<span class="ch-topic">'+l.topic+'</span><span class="nav-stars'+(s?" on":"")+'">'+(s?"★".repeat(s):"")+"</span></a></li>"; }).join("")+"</ul></div>";
+    map+='<div class="ch-card"><div class="ch-head"><span class="ch-n">'+(ch<FINAL?"РОЗДІЛ "+ch:"ФІНАЛ")+'</span><h3>'+CHAPTERS[ch]+'</h3></div><ul class="ch-list">'+ls.map(l=>{ const s=SAVE.done[l.id]||0; return '<li><a href="#'+l.id+'"><span class="nav-num">'+String(l.n).padStart(2,"0")+"</span>"+l.title+'<span class="ch-topic">'+l.topic+'</span><span class="nav-stars'+(s?" on":"")+'">'+(s?"★".repeat(s):"")+"</span></a></li>"; }).join("")+"</ul></div>";
   }
   main.innerHTML=`
   <section class="hero">
     <div class="hero-text">
-      <p class="eyebrow">Python · умови · цикли · винятки</p>
+      <p class="eyebrow">Python · умови · цикли · винятки · функції · файли</p>
       <h1>Python-<wbr>практикум</h1>
-      <p class="hero-lead">14 інтерактивних прикладів з автоматизації та робототехніки. У кожному ви пишете програму на Python для теплиці, конвеєра, робота чи марсохода, запускаєте її просто в браузері й бачите результат в анімації.</p>
+      <p class="hero-lead">${LEVELS.length} інтерактивних прикладів з автоматизації та робототехніки. У кожному ви пишете програму на Python для теплиці, конвеєра, робота чи марсохода, запускаєте її просто в браузері й бачите результат в анімації.</p>
       <div class="hero-cta"><a class="btn btn-run" href="#st-01">Почати зі станції 01</a><a class="btn" href="#teoria-umovy">Спершу теорія</a></div>
     </div>
     <div class="hero-steps">
@@ -311,27 +425,35 @@ function renderTheory(th){
   const i=TH.indexOf(th);
   let h='<article class="theory"><p class="eyebrow">Теорія · '+(i+1)+" з "+TH.length+"</p><h1>"+th.title+'</h1><p class="lead">'+th.lead+"</p>";
   let k=0;
-  for(const [type,val] of th.body){
+  for(const [type,val,opt] of th.body){
     if(type==="h") h+="<h2>"+val+"</h2>";
     else if(type==="p") h+="<p>"+val+"</p>";
     else if(type==="note") h+='<p class="note">'+val+"</p>";
     else if(type==="list") h+="<ul>"+val.map(x=>"<li>"+x+"</li>").join("")+"</ul>";
     else if(type==="table") h+='<div class="tbl-wrap"><table><thead><tr>'+val[0].map(x=>"<th>"+esc(x)+"</th>").join("")+"</tr></thead><tbody>"+val.slice(1).map(r=>"<tr>"+r.map((x,j)=>"<td>"+(j===0?"<code>"+esc(x)+"</code>":esc(x))+"</td>").join("")+"</tr>").join("")+"</tbody></table></div>";
-    else if(type==="code"){ h+='<div class="runnable" data-k="'+k+'"><div class="run-ed"></div><div class="run-bar"><button class="btn btn-run btn-sm" type="button">▶ Виконати</button><button class="btn btn-sm run-reset" type="button">Повернути приклад</button><span class="run-hint">Код можна змінювати</span></div><pre class="run-out" hidden></pre></div>'; k++; }
+    else if(type==="code"){ const fl=opt&&opt.files?Object.keys(opt.files):[]; h+='<div class="runnable" data-k="'+k+'">'+(fl.length?'<div class="run-files">'+fl.map(n=>'<div class="run-file"><div class="run-file-h">'+esc(n)+'</div><pre>'+esc(opt.files[n])+"</pre></div>").join("")+"</div>":"")+'<div class="run-ed"></div><div class="run-bar"><button class="btn btn-run btn-sm" type="button">▶ Виконати</button><button class="btn btn-sm run-reset" type="button">Повернути приклад</button><span class="run-hint">Код можна змінювати</span></div><pre class="run-out" hidden></pre></div>'; k++; }
   }
   const nextTh=TH[i+1], firstLv=LEVELS.find(l=>l.ch===i+1);
   h+='<div class="theory-next">'+(firstLv?'<a class="btn btn-run" href="#'+firstLv.id+'">До практики: станція '+String(firstLv.n).padStart(2,"0")+" →</a>":"")+(nextTh?'<a class="btn" href="#'+nextTh.id+'">Далі: '+nextTh.title+"</a>":"")+"</div></article>";
   main.innerHTML=h;
-  const codes=th.body.filter(b=>b[0]==="code").map(b=>b[1]);
+  const codes=th.body.filter(b=>b[0]==="code").map(b=>b[1]), opts=th.body.filter(b=>b[0]==="code").map(b=>b[2]||null);
   main.querySelectorAll(".runnable").forEach(box=>{
-    const src=codes[+box.dataset.k];
+    const src=codes[+box.dataset.k], opt=opts[+box.dataset.k];
     const out=box.querySelector(".run-out");
     const run=async()=>{
       out.hidden=false; out.className="run-out"; out.textContent="Виконується…";
       if(!window.Sk){ out.textContent="Python-рушій не завантажився. Перевір підключення до інтернету й онови сторінку."; return; }
-      const r=await runCode(PLAIN_LEVEL,{},ed.value);
+      const fsc=opt&&opt.files?{files:Object.assign({},opt.files)}:null;
+      const r=fsc?await runCode(FILE_PLAIN_LEVEL,fsc,ed.value):await runCode(PLAIN_LEVEL,{},ed.value);
       out.textContent=(r.out||"")+(r.err?(r.out?"\n":"")+"⚠ "+r.err.text:"");
       if(!r.out&&!r.err) out.textContent="(програма нічого не вивела)";
+      if(fsc&&r.world&&r.world.files){
+        const ch=Object.keys(r.world.files).filter(n=>r.world.files[n]!==opt.files[n]);
+        if(ch.length) out.textContent=out.textContent.replace(/\n+$/,"");
+        ch.forEach(n=>{ out.textContent+="\n\n── файл "+n+" після запуску ──\n"+(r.world.files[n]||"(порожній)").replace(/\n$/,""); });
+        const op=r.world.handles.filter(h=>!h.closed&&h.mode!=="r");
+        op.forEach(h=>{ out.textContent+="\n\n⚠ Файл "+h.name+" не закрито: записане лишилося в буфері."; });
+      }
       if(r.err){ out.classList.add("has-err"); ed.showError(r.err.line); }
     };
     const ed=makeEditor(box.querySelector(".run-ed"),src,{onRun:run,id:"ex-"+th.id+"-"+box.dataset.k,label:"Приклад коду"});
@@ -349,7 +471,7 @@ function renderLevel(lv){
   main.innerHTML=`
   <section class="level">
     <header class="plate">
-      <div class="plate-id"><span class="stripe" aria-hidden="true"></span>СТАНЦІЯ ${n}<span class="plate-ch">${lv.ch<5?"Розділ "+lv.ch+" · ":""}${CHAPTERS[lv.ch]}</span></div>
+      <div class="plate-id"><span class="stripe" aria-hidden="true"></span>СТАНЦІЯ ${n}<span class="plate-ch">${lv.ch<FINAL?"Розділ "+lv.ch+" · ":""}${CHAPTERS[lv.ch]}</span></div>
       <h1>${lv.title}</h1>
       <p class="plate-topic">${lv.topic}</p>
     </header>

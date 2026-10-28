@@ -2,7 +2,7 @@
 const PAL={};
 function readPal(){
   const cs=getComputedStyle(document.documentElement);
-  ["sc-sky","sc-floor","sc-metal","sc-metal2","sc-belt","sc-glass","sc-leaf","sc-pot","sc-road","sc-mars","sc-marssky","sc-hill","p-red","p-blue","p-green","p-yellow","ink","muted","accent","ok","bad","warn","panel","line","bg","code-bg"].forEach(n=>{ PAL[n.replace(/-/g,"_")]=cs.getPropertyValue("--"+n).trim()||"#888"; });
+  ["sc-sky","sc-floor","sc-metal","sc-metal2","sc-belt","sc-glass","sc-leaf","sc-pot","sc-road","sc-mars","sc-marssky","sc-hill","p-red","p-blue","p-green","p-yellow","ink","muted","accent","ok","bad","warn","panel","line","bg","code-bg","faint","accent-ink"].forEach(n=>{ PAL[n.replace(/-/g,"_")]=cs.getPropertyValue("--"+n).trim()||"#888"; });
 }
 const FB='"Onest", system-ui, sans-serif', FM='"JetBrains Mono", ui-monospace, monospace', FD='"Unbounded", "Onest", sans-serif';
 const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
@@ -496,5 +496,153 @@ SCENES.motor={
     const h=clamp((st.temp-20)/90,0,1)*104; c.fillStyle=st.temp>80?P.bad:st.temp>50?P.warn:P.ok; rr(c,563,249-h,10,h,5); c.fill();
     T(c,Math.round(st.temp)+"°",568,266,{s:12,w:700,f:FM,a:"center"});
     if(a&&a.ev.t==="run"){ T(c,"обробка: "+a.ev.job,gx,gy+110,{s:13,w:600,a:"center"}); }
+  }
+};
+
+/* ---------------- Лабораторія ВТК ---------------- */
+SCENES.qc={
+  init(sc){ return {sc,rows:sc.batch.map(([w,l])=>({w,l,got:undefined,exp:undefined})),cur:-1}; },
+  dur(){ return .45; },
+  step(st,ev){ if(ev.t==="qc"){ st.cur=ev.i; Object.assign(st.rows[ev.i],{got:ev.got,exp:ev.exp}); } },
+  draw(c,st,T0){
+    const P=PAL, a=st.anim, sc=st.sc;
+    c.fillStyle=P.sc_sky; c.fillRect(0,0,640,400);
+    const py=v=>v===null||v===undefined?"None":v===true?"True":v===false?"False":typeof v==="string"?'"'+v+'"':String(v);
+    // стенд
+    panel(c,16,16,196,368);
+    T(c,"СТЕНД",30,36,{s:10,w:700,c:P.muted});
+    const r=st.cur>=0?st.rows[st.cur]:null;
+    // ваги
+    c.fillStyle=P.sc_metal2; c.fillRect(46,190,136,10); c.fillRect(106,200,16,26); rr(c,66,226,96,30,5); c.fill();
+    rr(c,74,231,80,20,3); c.fillStyle="#0b1a12"; c.fill();
+    T(c,r?r.w+" г":"— г",114,242,{s:13,w:700,f:FM,c:"#6dffa8",a:"center"});
+    // деталь
+    if(r){ const drop=a&&a.ev.t==="qc"?ease(Math.min(1,a.p*2)):1; const len=60+(r.l-46)*8, y=lerp(110,170,drop);
+      rr(c,114-len/2,y,len,20,6); c.fillStyle=P.sc_metal; c.fill(); c.strokeStyle=P.sc_metal2; c.lineWidth=1.5; c.stroke();
+      // штангенциркуль
+      c.strokeStyle=P.accent; c.lineWidth=2; c.beginPath(); c.moveTo(114-len/2,y-8); c.lineTo(114-len/2,y-22); c.lineTo(114+len/2,y-22); c.lineTo(114+len/2,y-8); c.stroke();
+      T(c,r.l+" мм",114,y-32,{s:12,w:700,f:FM,c:P.accent,a:"center"});
+    }
+    T(c,"is_ok(вага, довжина)",30,286,{s:11,f:FM,c:P.muted});
+    if(r&&r.got!==undefined){
+      const ok=r.got===r.exp;
+      T(c,py(r.got),114,318,{s:24,w:700,f:FM,c:ok?P.ok:P.bad,a:"center"});
+      T(c,ok?"збігається з еталоном":"еталон: "+py(r.exp),114,346,{s:11,w:600,c:ok?P.ok:P.bad,a:"center"});
+    } else T(c,"?",114,318,{s:24,w:700,f:FM,c:P.faint||P.muted,a:"center"});
+    T(c,"норма: 95–105 г, 49–51 мм",114,372,{s:10,c:P.muted,a:"center"});
+    // таблиця
+    const x0=228, cols=[[x0+14,"№"],[x0+48,"вага, г"],[x0+124,"довжина, мм"],[x0+222,"повернула"],[x0+302,"еталон"]];
+    panel(c,x0,16,396,368);
+    cols.forEach(([x,h])=>T(c,h,x,38,{s:10,w:700,c:P.muted}));
+    c.fillStyle=P.line; c.fillRect(x0+10,50,376,1);
+    const rh=Math.min(31,320/st.rows.length);
+    st.rows.forEach((row,i)=>{
+      const y=58+i*rh, done=row.got!==undefined, ok=done&&row.got===row.exp;
+      let al=1; if(a&&a.ev.t==="qc"&&a.ev.i===i) al=Math.min(1,a.p*2.5);
+      if(done){ rr(c,x0+8,y,380,rh-4,5); c.fillStyle=alpha(ok?P.ok:P.bad,.13*al); c.fill(); }
+      if(i===st.cur){ rr(c,x0+8,y,380,rh-4,5); c.strokeStyle=P.accent; c.lineWidth=1.5; c.stroke(); }
+      const cy=y+(rh-4)/2;
+      T(c,String(i+1),cols[0][0],cy,{s:12,w:600,f:FM,c:P.muted});
+      T(c,String(row.w),cols[1][0],cy,{s:13,w:600,f:FM});
+      T(c,String(row.l),cols[2][0],cy,{s:13,w:600,f:FM});
+      if(done){ c.globalAlpha=al; T(c,py(row.got),cols[3][0],cy,{s:13,w:700,f:FM,c:ok?P.ok:P.bad}); T(c,py(row.exp),cols[4][0],cy,{s:13,w:600,f:FM,c:P.muted}); T(c,ok?"✓":"✗",x0+382,cy,{s:15,w:700,c:ok?P.ok:P.bad,a:"right"}); c.globalAlpha=1; }
+    });
+  }
+};
+
+/* ---------------- Файли ---------------- */
+function fileLines(s){ const out=[]; if(!s) return out; const parts=s.split("\n"); parts.forEach((p,i)=>{ const nl=i<parts.length-1; if(!nl&&p==="") return; out.push({t:p,nl}); }); return out; }
+function clipText(c,s,w){ if(c.measureText(s).width<=w) return s; while(s.length>1&&c.measureText(s+"…").width>w) s=s.slice(0,-1); return s+"…"; }
+SCENES.files={
+  crashTop:true,
+  init(sc){
+    const st={sc,order:[],f:{},tape:[]};
+    const add=(name,role)=>{ if(st.f[name]) return; st.order.push(name); st.f[name]={name,role,text:name in sc.files?sc.files[name]:null,buf:"",open:false,mode:null,cur:-1,prev:null,miss:false}; };
+    (sc.inputs||[]).forEach(n=>add(n,"in")); (sc.outputs||[]).forEach(n=>add(n,"out"));
+    st.add=add; return st;
+  },
+  dur(ev){ return {fopen:.45,fline:.26,fwrite:.3,fclose:.45,fnf:.8,show:.45}[ev.t]||.3; },
+  step(st,ev){
+    if(ev.name&&!st.f[ev.name]) st.add(ev.name,"out");
+    const f=ev.name?st.f[ev.name]:null;
+    if(ev.t==="fopen"){ f.open=true; f.mode=ev.mode; f.cur=-1; if(ev.mode==="w"){ f.prev=f.text; f.text=""; } if(ev.mode==="a"&&f.text===null) f.text=""; }
+    if(ev.t==="fline") f.cur=ev.i;
+    if(ev.t==="fwrite") f.buf+=ev.text;
+    if(ev.t==="fclose"){ if(f.mode!=="r"){ f.text=(f.text||"")+f.buf; f.buf=""; } f.open=false; f.prev=null; f.cur=-1; }
+    if(ev.t==="fnf") f.miss=true;
+    if(ev.t==="show") st.tape.push(ev.v);
+  },
+  card(c,st,f,x,y,w,h,T0){
+    const P=PAL, a=st.anim, me=a&&a.ev.name===f.name?a:null;
+    const missing=f.text===null&&!f.open;
+    rr(c,x,y,w,h,10); c.fillStyle=missing?alpha(P.sc_metal,.12):P.panel; c.fill();
+    if(missing) c.setLineDash([6,5]);
+    c.strokeStyle=f.open?P.accent:P.line; c.lineWidth=f.open?2:1.5; c.stroke(); c.setLineDash([]);
+    // заголовок
+    c.fillStyle=P.muted; c.beginPath(); c.moveTo(x+12,y+9); c.lineTo(x+20,y+9); c.lineTo(x+24,y+13); c.lineTo(x+24,y+23); c.lineTo(x+12,y+23); c.closePath(); c.fill();
+    c.font="700 12px "+FM; const badge=f.open?(f.mode==="r"?"читання":f.mode==="w"?"запис":"дописування"):"закрито";
+    c.font="700 10px "+FB; const bw=c.measureText(badge).width+12;
+    c.font="700 12px "+FM; T(c,clipText(c,f.name,w-(w>150?bw+44:36)),x+30,y+16,{s:12,w:700,f:FM});
+    if(w>150&&!missing){ rr(c,x+w-bw-10,y+8,bw,17,8); c.fillStyle=f.open?P.accent:alpha(P.sc_metal,.25); c.fill(); T(c,badge,x+w-bw/2-10,y+17,{s:10,w:700,c:f.open?P.accent_ink||"#fff":P.muted,a:"center"}); }
+    c.fillStyle=P.line; c.fillRect(x+8,y+30,w-16,1);
+    if(missing){
+      T(c,"файлу немає",x+w/2,y+h/2,{s:12,w:600,c:P.muted,a:"center"});
+      if(f.miss){ T(c,"FileNotFoundError",x+w/2,y+h/2+20,{s:w>140?11:9,w:700,f:FM,c:P.bad,a:"center"}); }
+      if(me&&me.ev.t==="fnf") pulse(c,x+w/2,y+h/2,me.p,P.bad);
+      return;
+    }
+    // рядки
+    const lh=17, top=y+38, rows=Math.max(1,Math.floor((h-46-(f.buf?16:0))/lh));
+    const all=fileLines((f.text||"")+f.buf), committed=(f.text||"").length;
+    let pos=0; all.forEach(L=>{ L.start=pos; pos+=L.t.length+(L.nl?1:0); L.buf=pos>committed&&f.buf!==""; });
+    const focus=f.role==="in"||f.mode==="r"?Math.max(f.cur,0):all.length-1;
+    const off=Math.max(0,Math.min(focus-rows+2,all.length-rows));
+    c.font="400 12px "+FM;
+    for(let k=0;k<rows&&off+k<all.length;k++){
+      const i=off+k, L=all[i], ly=top+k*lh+lh/2;
+      if(f.mode==="r"&&f.open&&i===f.cur){ rr(c,x+6,ly-lh/2,w-12,lh,4); c.fillStyle=alpha(P.accent,.18); c.fill(); T(c,"▶",x+10,ly,{s:9,c:P.accent}); }
+      const col=L.buf?P.warn:(f.mode==="r"&&f.open&&i<f.cur)?P.muted:P.ink;
+      const nx=x+(w>140?36:20);
+      if(w>140) T(c,String(i+1),x+30,ly,{s:10,f:FM,c:P.faint||P.muted,a:"right",w:400});
+      c.font="400 12px "+FM; const txt=clipText(c,L.t,w-(nx-x)-24);
+      T(c,txt,nx,ly,{s:12,f:FM,c:col,w:L.buf?400:500});
+      if(L.nl){ c.font="500 12px "+FM; T(c,"↵",nx+c.measureText(txt).width+3,ly,{s:11,f:FM,c:alpha(L.buf?P.warn:P.accent,.6)}); }
+    }
+    if(off>0) T(c,"↑ ще "+off,x+w-10,top-2,{s:9,c:P.muted,a:"right"});
+    if(!all.length&&!f.prev) T(c,"порожній",x+w/2,top+20,{s:11,c:P.muted,a:"center"});
+    // старий вміст, стертий режимом "w"
+    if(f.prev&&me&&me.ev.t==="fopen"){ const al=1-me.p; fileLines(f.prev).slice(0,rows).forEach((L,k)=>{ const ly=top+k*lh+lh/2; T(c,clipText(c,L.t,w-60),x+36,ly,{s:12,f:FM,c:alpha(P.bad,al)}); c.fillStyle=alpha(P.bad,al); c.fillRect(x+36,ly,Math.min(w-60,c.measureText(L.t).width),1.5); }); }
+    if(f.buf){ T(c,"у буфері, ще не у файлі: "+f.buf.length+" симв.",x+12,y+h-12,{s:10,w:600,c:P.warn}); }
+    if(me&&me.ev.t==="fclose"&&f.mode!=="r"){ rr(c,x,y,w,h,10); c.strokeStyle=alpha(P.ok,1-me.p); c.lineWidth=4; c.stroke(); }
+    if(me&&me.ev.t==="fwrite"){ const L=all[all.length-1]; if(L){ const ly=top+(all.length-1-off)*lh+lh/2; circ(c,x+w-16,ly,4+me.p*4,alpha(P.warn,1-me.p)); } }
+  },
+  draw(c,st,T0){
+    const P=PAL, sc=st.sc, n=sc.n||0;
+    c.fillStyle=P.sc_sky; c.fillRect(0,0,640,400);
+    const bottom=n?292:384, k=st.order.length, gap=14;
+    const w=(608-(k-1)*gap)/Math.max(1,k);
+    st.order.forEach((name,i)=>this.card(c,st,st.f[name],16+i*(w+gap),16,w,bottom-16,T0));
+    if(k>1&&(sc.inputs||[]).length===1&&(sc.outputs||[]).length===1){ const mx=16+w+gap/2; T(c,"→",mx,bottom/2,{s:14,w:700,c:P.muted,a:"center"}); }
+    if(!n) return;
+    const a=st.anim, flash=a&&a.ev.t==="show"?1-a.p:0;
+    if(n===1){
+      const v=st.tape.length?st.tape[st.tape.length-1]:"—";
+      rr(c,16,306,608,78,12); c.fillStyle=P.sc_belt; c.fill();
+      rr(c,26,316,588,58,6); c.fillStyle="#0b1a12"; c.fill();
+      T(c,"ТАБЛО",40,345,{s:10,w:700,c:"#6dffa8"});
+      T(c,String(v),320,347,{s:34,w:700,f:FM,c:"#6dffa8",a:"center"});
+      if(flash){ rr(c,26,316,588,58,6); c.fillStyle="rgba(255,255,255,"+(flash*.15)+")"; c.fill(); }
+      if(st.tape.length>1) T(c,"показано значень: "+st.tape.length,604,345,{s:11,w:700,c:"#ff6b5e",a:"right"});
+      return;
+    }
+    const y0=306;
+    T(c,"ТАБЛО",16,y0,{s:10,w:700,c:P.muted});
+    for(let i=0;i<n;i++){
+      const x=16+i*(608/n), bw=608/n-8, v=st.tape[i];
+      rr(c,x,y0+12,bw,58,6); c.fillStyle=v===undefined?alpha(P.sc_metal,.18):P.panel; c.fill(); c.strokeStyle=P.line; c.lineWidth=1; c.stroke();
+      T(c,(sc.inputs&&sc.inputs[i])||("№"+(i+1)),x+6,y0+23,{s:9,w:600,c:P.muted});
+      if(v!==undefined) T(c,String(v),x+bw/2,y0+48,{s:v==="NO FILE"?13:17,w:700,f:FM,c:v==="NO FILE"?P.bad:P.ink,a:"center"});
+    }
+    if(st.tape.length>n) T(c,"+ зайві: "+(st.tape.length-n),624,y0,{s:11,w:700,c:P.bad,a:"right"});
   }
 };

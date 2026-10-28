@@ -10,6 +10,7 @@ const FAIL=(msg)=>({ok:false,msg});
 const pyLit=v=> typeof v==="boolean" ? (v?"True":"False") : typeof v==="string" ? JSON.stringify(v) : Array.isArray(v) ? "["+v.map(pyLit).join(", ")+"]" : String(v);
 const varsPrelude=vars=>Object.entries(vars).map(([k,v])=>k+" = "+pyLit(v)).join("\n")+"\n";
 const fmtVal=v=> typeof v==="string" ? '"'+v+'"' : String(v);
+const fmtPy=v=> v===null||v===undefined ? "None" : typeof v==="boolean" ? (v?"True":"False") : fmtVal(v);
 
 class WErr{ constructor(type,msg){ this.type=type; this.msg=msg; } }
 class World{
@@ -38,7 +39,10 @@ class ScanError(Exception):
     pass
 class _Halt(BaseException):
     pass
-_E = {"RobotError": RobotError, "SensorError": SensorError, "OverheatError": OverheatError, "JamError": JamError, "ScanError": ScanError, "_Halt": _Halt}
+class FileNotFoundError(IOError):
+    pass
+OSError = IOError
+_E = {"RobotError": RobotError, "SensorError": SensorError, "OverheatError": OverheatError, "JamError": JamError, "ScanError": ScanError, "_Halt": _Halt, "FileNotFoundError": FileNotFoundError, "ValueError": ValueError, "TypeError": TypeError, "IOError": IOError}
 def _c(name, *a):
     r = _js(name, *a)
     if type(r) is list and len(r) == 3 and r[0] == "__err__":
@@ -105,6 +109,13 @@ class BeltWorld extends World{
     if(this.cur&&!this.cur.dest) this.cur.dest="stop";
     this.emit({t:"stop",id:this.cur?this.cur.id:-1});
     return null;
+  }
+  api_route(r){
+    const fn=this.sc.fn||"decide";
+    if(r===null||r===undefined) this.err("RobotError","Функція "+fn+"() повернула None. Мабуть, замість return стоїть print або return забуто в одній із гілок.");
+    const dest={left:"left",right:"right",pass:"end"}[r];
+    if(!dest) this.err("RobotError","Функція "+fn+"() повернула "+fmtPy(r)+", а сортувальник розуміє лише \"left\", \"right\" або \"pass\".");
+    return this.api_act(dest);
   }
   api_scan(id){
     this.need();
@@ -311,6 +322,129 @@ function genStream(r,n,errRate){
   s.forEach(o=>{ if(o.ok&&Math.round(o.v*10)%10===0) o.v=Math.round((o.v+0.3)*10)/10; });
   return s;
 }
+
+/* ---------- Лабораторія ВТК ---------- */
+class QCWorld extends World{
+  constructor(sc){ super(sc); this.got=[]; }
+  api_qc(w,l,got){ const i=this.got.length, exp=this.sc.rule(w,l); this.got.push(got); this.emit({t:"qc",i,w,l,got:got===undefined?null:got,exp}); return null; }
+}
+
+/* ---------- Віртуальні файли ---------- */
+const splitLines=s=>{ const out=[]; let cur=""; for(const ch of s){ cur+=ch; if(ch==="\n"){ out.push(cur); cur=""; } } if(cur) out.push(cur); return out; };
+class FileWorld extends StationWorld{
+  constructor(sc){ super(sc); this.files=Object.assign({},sc.files||{}); this.handles=[]; }
+  h(id){ const h=this.handles[id]; if(!h) this.err("IOError","Невідомий файл."); return h; }
+  api_fs_open(name,mode){
+    if(typeof name!=="string") this.err("TypeError","Назва файлу має бути рядком, наприклад \"data.txt\", а отримано "+fmtPy(name)+".");
+    if(mode===null||mode===undefined) mode="r";
+    if(!["r","w","a"].includes(mode)) this.err("ValueError","Невідомий режим "+fmtPy(mode)+". Тут є режими \"r\" (читати), \"w\" (записати наново) і \"a\" (дописати в кінець).");
+    if(mode==="r"&&!(name in this.files)){ this.emit({t:"fnf",name}); this.err("FileNotFoundError","Файлу «"+name+"» немає."); }
+    if(mode==="w") this.files[name]="";
+    if(mode==="a"&&!(name in this.files)) this.files[name]="";
+    const h={id:this.handles.length,name,mode,buf:"",closed:false,viaWith:false};
+    this.handles.push(h);
+    this.emit({t:"fopen",name,mode});
+    return [h.id, mode==="r"?splitLines(this.files[name]):[]];
+  }
+  api_fs_line(id,i){ const h=this.h(id); this.emit({t:"fline",name:h.name,i}); return null; }
+  api_fs_write(id,s){ const h=this.h(id); h.buf+=s; this.emit({t:"fwrite",name:h.name,text:s}); return null; }
+  api_fs_close(id,viaWith){ const h=this.h(id); if(h.closed) return null; h.closed=true; h.viaWith=!!viaWith; if(h.mode!=="r") this.files[h.name]+=h.buf; this.emit({t:"fclose",name:h.name}); return null; }
+  open(name){ return this.handles.filter(h=>h.name===name&&!h.closed); }
+}
+const DISPLAY_PRELUDE=`
+class _Display:
+    def show(self, value):
+        _c("show", value)
+display = _Display()
+`;
+const FILE_PRELUDE=`
+class _File:
+    def __init__(self, name, mode):
+        r = _c("fs_open", name, mode)
+        self._h = r[0]
+        self._lines = r[1]
+        self._pos = 0
+        self.name = name
+        self.mode = mode
+        self.closed = False
+    def _need(self, reading):
+        if self.closed:
+            raise ValueError("Файл «" + self.name + "» уже закрито, працювати з ним не можна.")
+        if reading and self.mode != "r":
+            raise IOError("Файл «" + self.name + "» відкрито для запису, читати з нього не можна.")
+        if not reading and self.mode == "r":
+            raise IOError("Файл «" + self.name + "» відкрито для читання. Щоб писати, відкрий його в режимі \\"w\\" або \\"a\\".")
+    def readline(self):
+        self._need(True)
+        if self._pos >= len(self._lines):
+            return ""
+        s = self._lines[self._pos]
+        _c("fs_line", self._h, self._pos)
+        self._pos += 1
+        return s
+    def read(self):
+        parts = []
+        s = self.readline()
+        while s != "":
+            parts.append(s)
+            s = self.readline()
+        return "".join(parts)
+    def readlines(self):
+        parts = []
+        s = self.readline()
+        while s != "":
+            parts.append(s)
+            s = self.readline()
+        return parts
+    def __iter__(self):
+        self._need(True)
+        return self
+    def __next__(self):
+        s = self.readline()
+        if s == "":
+            raise StopIteration
+        return s
+    def write(self, text):
+        self._need(False)
+        if type(text) is not str:
+            raise TypeError("write() приймає лише рядок, а отримано " + type(text).__name__ + ". Перетвори значення на рядок через str().")
+        _c("fs_write", self._h, text)
+        return len(text)
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            _c("fs_close", self._h, False)
+    def __enter__(self):
+        return self
+    def __exit__(self, a, b, c):
+        if not self.closed:
+            self.closed = True
+            _c("fs_close", self._h, True)
+        return False
+    def __repr__(self):
+        return "<файл " + self.name + ", режим " + self.mode + ">"
+def open(name, mode="r", encoding=None):
+    return _File(name, mode)
+`;
+const textOf=lines=>lines.map(s=>s+"\n").join("");
+const showLine=s=>"«"+String(s).replace(/\n/g,"\\n")+"»";
+// порівнює вміст файлу з очікуваними рядками; останнє \n не обов'язкове
+function checkFileText(w,name,expLines){
+  if(!(name in w.files)) return FAIL("Файл "+name+" так і не створено. Відкрий його так: open(\""+name+"\", \"w\").");
+  if(w.open(name).length){ const h=w.open(name)[0]; return FAIL("Файл "+name+" лишився відкритим, тож записане так і лежить у буфері й до файлу не потрапило."+(h.mode==="r"?"":" Закрий файл через "+"f.close() або відкривай його через with.")); }
+  let got=w.files[name]; if(got.endsWith("\n")) got=got.slice(0,-1);
+  const g=got===""?[]:got.split("\n");
+  for(let i=0;i<Math.max(g.length,expLines.length);i++){
+    if(g[i]===undefined) return FAIL("У файлі "+name+" рядків: "+g.length+", а має бути "+expLines.length+". Рядок "+(i+1)+" мав бути "+showLine(expLines[i])+".");
+    if(expLines[i]===undefined) return FAIL("У файлі "+name+" зайвий рядок "+(i+1)+": "+showLine(g[i])+".");
+    if(g[i]!==expLines[i]){
+      const hint=g[i].startsWith(expLines[i])&&g[i].length>expLines[i].length?" Схоже, бракує \\n у кінці рядка, і наступний рядок прилип до цього.":"";
+      return FAIL("Рядок "+(i+1)+" у файлі "+name+": очікувалося "+showLine(expLines[i])+", а записано "+showLine(g[i])+"."+hint);
+    }
+  }
+  return null;
+}
+function checkClosed(w){ const h=w.handles.find(h=>!h.closed); return h?FAIL("Файл "+h.name+" лишився відкритим. Після роботи закрий його: f.close()."):null; }
 
 /* ================= РІВНІ ================= */
 const LEVELS=[
@@ -758,9 +892,414 @@ for job in jobs:
     return OK("Оброблено "+sc.jobs.length+" деталей, мотор вимкнено.");
   }
 },
-/* ---------- Розділ 5. Фінал ---------- */
+/* ---------- Розділ 5. Функції ---------- */
 {
-  id:"st-14", ch:5, scene:"belt", title:"Міні-завод", topic:"усе разом",
+  id:"st-14", ch:5, scene:"grid", title:"Сходи", topic:"def · виклик функції",
+  brief:"Робот має спуститися сходами до батарейки. Кожну сходинку він долає тими самими чотирма командами, а кількість сходинок щоразу інша. Команди зручно зібрати в одну функцію, а потім викликати її стільки разів, скільки треба.",
+  task:["Змінна <code>steps</code> («сходинки») каже, скільки сходинок до батарейки. Щоразу це інше число від 3 до 5.", "Одну сходинку робот проходить чотирма командами саме в такому порядку: <code>robot.forward()</code>, <code>robot.turn_right()</code>, <code>robot.forward()</code>, <code>robot.turn_left()</code>. Після них він стоїть на наступній сходинці й знову дивиться праворуч, як на старті.", "Визнач функцію <code>step_down()</code> («крок униз»), яка виконує ці чотири команди. Рядок <code>def step_down():</code> уже є в заготовці. Під ним заміни <code>pass</code> на чотири команди з відступом 4 пробіли: це тіло функції.", "Поки функцію не викликали, вона нічого не робить. Тому нижче, вже без відступу, напиши цикл <code>for i in range(steps):</code>, а в ньому виклич функцію: <code>step_down()</code>."],
+  api:[["steps", "кількість сходинок до батарейки", "англ. <i>steps</i> — «сходинки, кроки»"], ["def step_down():", "визначає функцію step_down без параметрів", "англ. <i>define</i> — «визначити»; <i>step down</i> — «крок униз»"], ["step_down()", "викликає функцію: виконує все її тіло", "дужки після назви обов'язкові"], ["robot.forward()", "робить один крок уперед", "англ. <i>forward</i> — «уперед»"], ["robot.turn_left()", "розвертає робота ліворуч на місці", "англ. <i>turn left</i> — «повернути ліворуч»"], ["robot.turn_right()", "розвертає робота праворуч на місці", "англ. <i>turn right</i> — «повернути праворуч»"]],
+  starter:`print("Сходинок:", steps)
+
+def step_down():
+    # чотири команди для однієї сходинки
+    pass
+
+# виклич step_down() стільки разів, скільки сходинок
+`,
+  solution:`def step_down():
+    robot.forward()
+    robot.turn_right()
+    robot.forward()
+    robot.turn_left()
+
+for i in range(steps):
+    step_down()
+`,
+  hints:["Тіло функції — це рядки з відступом під <code>def step_down():</code>. Заміни <code>pass</code> на чотири команди робота.","Щоб викликати функцію, пишуть її назву з дужками: <code>step_down()</code>. Без дужок Python нічого не виконає.","Цикл стоїть після функції й без відступу: <code>for i in range(steps):</code>, а в ньому один рядок <code>step_down()</code>."],
+  needFn:["step_down"],
+  count:4,
+  gen(r,i){ const n=[3,5,4,ri(r,3,5)][i]; const path=[[0,0]]; for(let k=0;k<n;k++){ path.push([k+1,k]); path.push([k+1,k+1]); } return {path,dir:0,W:n+1,H:n+1,vars:{steps:n}}; },
+  label:sc=>"сходинок: "+sc.vars.steps,
+  world:sc=>new GridWorld(sc),
+  prelude:sc=>varsPrelude(sc.vars)+GRID_PRELUDE,
+  check(w){ if(w.x!==w.goal[0]||w.y!==w.goal[1]) return FAIL(w.steps===0?"Робот не зрушив з місця. Функцію визначено, але жодного разу не викликано: потрібен цикл із викликом step_down().":"Робот не дійшов до батарейки. Перевір, чи step_down() викликано стільки разів, скільки сходинок."); return OK(); }
+},
+{
+  id:"st-15", ch:5, scene:"pallet", title:"Ряди на замовлення", topic:"параметри функції",
+  brief:"Замовлення на палету щоразу інше: скільки рядів, скільки в кожному ящиків і якого вони кольору. Станція сама читає замовлення й для кожного ряду викликає твою функцію <code>row</code>. Через параметри вона передає функції номер ряду, кількість ящиків і колір.",
+  task:["Напиши функцію з трьома параметрами: <code>def row(y, count, color):</code>. Параметр <code>y</code> — номер ряду знизу (0, 1, 2 …), <code>count</code> — скільки ящиків поставити, <code>color</code> — їхній колір, <code>\"orange\"</code> або <code>\"blue\"</code>.", "Функція ставить у ряд <code>y</code> рівно <code>count</code> ящиків кольору <code>color</code> на позиції <code>x</code> = 0, 1, 2 … до <code>count - 1</code>. Один ящик ставить команда <code>arm.place(x, y, color)</code>.", "Викликати <code>row</code> самому не треба: станція зробить це для кожного ряду замовлення. Наприклад, вона може викликати <code>row(0, 6, \"orange\")</code>, а потім <code>row(1, 4, \"blue\")</code>. У першому виклику <code>y</code> дорівнює 0, <code>count</code> дорівнює 6, а <code>color</code> — <code>\"orange\"</code>.", "У тілі функції не пиши конкретних чисел і кольорів на кшталт 6 чи <code>\"orange\"</code>. Замовлення щоразу інше, тому працюй лише з параметрами <code>y</code>, <code>count</code> і <code>color</code>."],
+  api:[["def row(y, count, color):", "функція з трьома параметрами; її викликає станція", "англ. <i>row</i> — «ряд»; <i>count</i> — «кількість»; <i>color</i> — «колір»"], ["arm.place(x, y, color)", "ставить ящик кольору color на позицію x у ряду y", "англ. <i>place</i> — «поставити»"], ["range(count)", "числа 0, 1, … count-1", "англ. <i>range</i> — «діапазон»"]],
+  starter:`def row(y, count, color):
+    # постав count ящиків кольору color у ряд y
+    pass
+`,
+  solution:`def row(y, count, color):
+    for x in range(count):
+        arm.place(x, y, color)
+`,
+  hints:["Усередині функції потрібен цикл <code>for x in range(count):</code>.","У циклі один рядок: <code>arm.place(x, y, color)</code>. Значення <code>y</code> і <code>color</code> вже прийшли через параметри.","Якщо станція пише, що функцію не знайдено, перевір назву: саме <code>row</code>, і саме три параметри в дужках."],
+  needFn:["row"],
+  count:4,
+  gen(r,i){
+    const nr=[3,2,4,ri(r,2,4)][i], orders=[]; let c=ri(r,5,8);
+    for(let y=0;y<nr;y++){ orders.push([y,c,y===0&&i===0?"orange":pick(r,["orange","blue"])]); c=Math.max(1,c-ri(r,1,3)); }
+    const target=[]; orders.forEach(([y,n,col])=>{ for(let x=0;x<n;x++) target.push({x,y,color:col}); });
+    return {orders,target};
+  },
+  label:sc=>sc.orders.map(o=>o[1]+(o[2]==="blue"?" син":" пом")).join(" · "),
+  world:sc=>new PalletWorld(sc),
+  prelude:sc=>"_orders = "+pyLit(sc.orders)+"\n"+`class _Arm:\n    def place(self, x, y=0, color="orange"):\n        _c("place", x, y, color)\narm = _Arm()\n`,
+  driver:()=>"for _o in _orders:\n    row(_o[0], _o[1], _o[2])\n",
+  check:(w,sc)=>checkPallet(w,sc,true)
+},
+{
+  id:"st-16", ch:5, scene:"belt", title:"Мозок сортувальника", topic:"return",
+  brief:"Сортувальник на конвеєрі вміє штовхати деталі, але сам не знає, куди саме. Для кожної деталі він викликає твою функцію <code>decide(part)</code> і робить те, що вона поверне.",
+  task:["Напиши функцію <code>decide(part)</code> («вирішити»). Станція викликає її для кожної деталі й передає деталь у параметрі <code>part</code>. Як і раніше, у деталі є <code>part.color</code> і <code>part.weight</code> (вага в грамах).", "Сама функція нічого не штовхає, вона лише повертає відповідь командою <code>return</code>. Відповідь — один із трьох рядків: <code>\"left\"</code> (ліворуч), <code>\"right\"</code> (праворуч) або <code>\"pass\"</code> (пропустити далі).", "Деталь, важча за 150 г (<code>part.weight &gt; 150</code>), іде праворуч, хоч якого вона кольору: поверни <code>\"right\"</code>.", "Інакше, якщо деталь червона, поверни <code>\"left\"</code>.", "Для всіх інших деталей поверни <code>\"pass\"</code>.", "<code>print</code> тут не допоможе: він лише показує текст у консолі, а станція отримує те, що стоїть після <code>return</code>. Якщо функція нічого не повернула, станція отримає <code>None</code> і зупинить лінію."],
+  api:[["def decide(part):", "функція, яку станція викликає для кожної деталі", "англ. <i>decide</i> — «вирішити»"], ["return \"left\"", "завершує функцію й повертає станції рядок \"left\"", "англ. <i>return</i> — «повернути»"], ["part.color", "\"red\", \"blue\", \"green\" або \"yellow\"", "англ. <i>color</i> — «колір»"], ["part.weight", "вага деталі в грамах", "англ. <i>weight</i> — «вага»"], ["\"left\" / \"right\" / \"pass\"", "ліворуч, праворуч, пропустити далі", "англ. <i>left</i>, <i>right</i>, <i>pass</i>"]],
+  starter:`def decide(part):
+    print("Деталь:", part.color, part.weight, "г")
+    # поверни "left", "right" або "pass"
+`,
+  solution:`def decide(part):
+    if part.weight > 150:
+        return "right"
+    elif part.color == "red":
+        return "left"
+    else:
+        return "pass"
+`,
+  hints:["Запусти заготовку: функція тільки друкує, нічого не повертає, і станція отримує <code>None</code>.","Кожна гілка <code>if</code> / <code>elif</code> / <code>else</code> закінчується своїм <code>return</code>: <code>return \"right\"</code>, <code>return \"left\"</code>, <code>return \"pass\"</code>.","Вагу перевіряй першою: важка червона деталь має йти праворуч, а не ліворуч."],
+  needFn:["decide"],
+  bins:{left:"ЧЕРВОНІ",right:"ВАЖКІ",end:"ІНШІ"},
+  destName:{left:"піти ліворуч",right:"піти праворуч",end:"поїхати далі",pack:"",stop:"",none:"бути відсортована"},
+  destNameGot:{left:"пішла ліворуч",right:"пішла праворуч",end:"поїхала далі",none:"не оброблена"},
+  describe:p=>({red:"червона",blue:"синя",green:"зелена",yellow:"жовта"}[p.color])+", "+p.weight+" г",
+  count:4,
+  gen(r){
+    const n=ri(r,8,10), parts=[];
+    for(let i=0;i<n;i++) parts.push({id:i,color:pick(r,["red","red","blue","green","yellow"]),weight:ri(r,8,30)*5});
+    const ix=shuffle(r,[...Array(n).keys()]);
+    Object.assign(parts[ix[0]],{color:"red",weight:ri(r,32,40)*5});
+    Object.assign(parts[ix[1]],{color:pick(r,["blue","green"]),weight:ri(r,31,40)*5});
+    Object.assign(parts[ix[2]],{color:"red",weight:ri(r,8,30)*5});
+    return {parts,attrs:["color","weight"]};
+  },
+  label:sc=>sc.parts.length+" деталей",
+  world:sc=>new BeltWorld(sc),
+  prelude:()=>BELT_PRELUDE,
+  driver:()=>"for _p in conveyor:\n    _c(\"route\", decide(_p))\n",
+  check(w){ return checkBelt(w,this,p=>p.weight>150?"right":p.color==="red"?"left":"end"); }
+},
+{
+  id:"st-17", ch:5, scene:"qc", title:"Лабораторія ВТК", topic:"кілька параметрів · return True / False",
+  brief:"У лабораторії відділу технічного контролю (ВТК) кожну деталь зважують і міряють. Рішення «придатна чи ні» тепер ухвалюватиме твоя функція. Стенд проганяє її на партії деталей і звіряє кожну відповідь з еталоном.",
+  task:["Напиши функцію <code>is_ok(weight, length)</code> («чи в нормі»). Вона отримує два числа: вагу деталі в грамах і довжину в міліметрах.", "Деталь придатна, якщо вага від 95 до 105 г <b>і</b> довжина від 49 до 51 мм. Тоді функція повертає <code>True</code>.", "Межі теж входять у норму: деталь вагою рівно 95 г і довжиною рівно 51 мм придатна.", "Якщо хоч одне значення виходить за межі, функція повертає <code>False</code>.", "Викликати функцію не треба. Стенд сам викличе <code>is_ok</code> для кожної деталі й передасть їй два числа в тому самому порядку: спершу вагу, потім довжину."],
+  api:[["def is_ok(weight, length):", "повертає True для придатної деталі, False для браку", "англ. <i>is OK</i> — «чи в нормі»; <i>weight</i> — «вага»; <i>length</i> — «довжина»"], ["return True", "повертає «так»", "англ. <i>true</i> — «істина»"], ["return False", "повертає «ні»", "англ. <i>false</i> — «хиба»"], ["95 <= weight <= 105", "True, якщо weight від 95 до 105 включно", "у Python порівняння можна писати ланцюжком"]],
+  starter:`def is_ok(weight, length):
+    print("Перевіряю:", weight, "г,", length, "мм")
+    # поверни True, якщо обидва значення в нормі, інакше False
+`,
+  solution:`def is_ok(weight, length):
+    if 95 <= weight <= 105 and 49 <= length <= 51:
+        return True
+    return False
+`,
+  hints:["Умова складається з двох частин, і обидві мають бути істинними, тому їх поєднують через <code>and</code>.","«Від 95 до 105 включно» записують як <code>weight &gt;= 95 and weight &lt;= 105</code> або коротше: <code>95 &lt;= weight &lt;= 105</code>.","Після <code>return True</code> функція завершується. Тому рядок <code>return False</code> можна писати просто після <code>if</code>, без <code>else</code>."],
+  needFn:["is_ok"],
+  count:4,
+  gen(r,i){
+    const fixed=[[95,51],[105,49],[94,50],[100,52],[106,50],[100,48],[100,50],[96,49]];
+    let b;
+    if(i===0) b=shuffle(r,fixed).concat([[ri(r,96,104),ri(r,49,51)],[ri(r,85,115),ri(r,45,55)]]);
+    else{ b=[]; for(let k=0;k<10;k++) b.push(r()<.5?[ri(r,95,105),ri(r,49,51)]:[ri(r,88,112),ri(r,46,54)]); }
+    return {batch:b,rule:(w,l)=>w>=95&&w<=105&&l>=49&&l<=51};
+  },
+  label:sc=>sc.batch.length+" деталей, придатних "+sc.batch.filter(([w,l])=>sc.rule(w,l)).length,
+  world:sc=>new QCWorld(sc),
+  prelude:sc=>"_batch = "+pyLit(sc.batch)+"\n",
+  driver:()=>"for _d in _batch:\n    _c(\"qc\", _d[0], _d[1], is_ok(_d[0], _d[1]))\n",
+  check(w,sc){
+    for(let i=0;i<sc.batch.length;i++){
+      const [wt,l]=sc.batch[i], exp=sc.rule(wt,l), got=w.got[i];
+      if(got!==exp){
+        const why=got===null||got===undefined?" Функція нічого не повернула: перевір, чи в кожному випадку є return.":typeof got!=="boolean"?" Функція має повертати саме True або False, без лапок.":"";
+        return FAIL("Деталь №"+(i+1)+" ("+wt+" г, "+l+" мм): очікувалося "+fmtPy(exp)+", а функція повернула "+fmtPy(got)+"."+why);
+      }
+    }
+    return OK("Усі "+sc.batch.length+" рішень збіглися з еталоном.");
+  }
+},
+{
+  id:"st-18", ch:5, scene:"sensor", title:"Надійне читання", topic:"return у циклі · None",
+  brief:"На станції 12 запит до датчика повторювали до трьох разів просто в основному циклі. Тепер ці спроби треба сховати у функцію: основний цикл стане коротшим, а функцію можна буде викликати будь-де.",
+  task:["Напиши функцію <code>safe_read()</code> («надійне читання») без параметрів. Вона робить до 3 спроб прочитати датчик через <code>sensor.read()</code>.", "Щойно спроба вдалася, функція одразу повертає прочитане значення: <code>return t</code>. Команда <code>return</code> завершує всю функцію, тож решта спроб уже не відбудеться, і <code>break</code> тут не потрібен.", "Якщо спроба закінчилася помилкою <code>SensorError</code>, функція пробує ще раз. Коли всі 3 спроби невдалі, вона повертає <code>None</code> («нічого»): <code>return None</code>.", "Під функцією, без відступу, напиши основну програму. Є 5 точок вимірювання: <code>for point in range(5):</code>. Для кожної точки виклич функцію й запам'ятай результат: <code>t = safe_read()</code>.", "Якщо результат порожній (<code>if t is None:</code>), покажи на табло <code>\"FAIL\"</code>. Інакше покажи саме значення: <code>display.show(t)</code>."],
+  api:[["def safe_read():", "робить до 3 спроб і повертає значення або None", "англ. <i>safe read</i> — «надійне читання»"], ["sensor.read()", "читає температуру; іноді замість числа виникає SensorError", "англ. <i>sensor read</i> — «прочитати датчик»"], ["return None", "повертає «нічого»: жодна спроба не вдалася", "англ. <i>none</i> — «нічого»"], ["t is None", "True, якщо в t лежить None", "англ. <i>is</i> — «є»"], ["display.show(значення)", "показує значення на табло", "англ. <i>display show</i> — «показати на табло»"]],
+  starter:`def safe_read():
+    # до 3 спроб: успіх — return значення,
+    # SensorError — пробуємо ще раз.
+    # Усі 3 невдалі — return None
+    pass
+
+for point in range(5):
+    t = safe_read()
+    # None — "FAIL", інакше — значення
+`,
+  solution:`def safe_read():
+    for attempt in range(3):
+        try:
+            return sensor.read()
+        except SensorError:
+            pass
+    return None
+
+for point in range(5):
+    t = safe_read()
+    if t is None:
+        display.show("FAIL")
+    else:
+        display.show(t)
+`,
+  hints:["Усередині функції потрібен цикл на 3 спроби: <code>for attempt in range(3):</code>, а в ньому <code>try</code> / <code>except SensorError</code>.","У <code>try</code> напиши <code>t = sensor.read()</code> і одразу <code>return t</code>. У <code>except</code> нічого робити не треба, тож там стоїть <code>pass</code>, і цикл піде на наступну спробу.","Рядок <code>return None</code> стоїть після циклу, з відступом лише функції. Python дійде до нього, тільки якщо жодна спроба не вдалася."],
+  needFn:["safe_read"],
+  count:4,
+  gen(r){
+    let plan; do{ plan=[0,0,1,2,3].map(()=>pick(r,[0,0,1,1,2,3])); } while(!plan.includes(3)||!plan.some(f=>f===1||f===2));
+    const s=[]; plan.forEach(f=>{ for(let k=0;k<f&&k<3;k++) s.push({ok:false}); if(f<3) s.push(genStream(r,1,0)[0]); });
+    return {stream:s.concat(genStream(r,12,0)),plan,mode:"sensor",n:5};
+  },
+  label:sc=>"збоїв: "+sc.plan.reduce((a,b)=>a+b,0),
+  world:sc=>new StationWorld(sc),
+  prelude:()=>SENSOR_PRELUDE,
+  check(w,sc){
+    const exp=[]; let k=0, reads=0;
+    for(let p=0;p<5;p++){ let a=0, done=false; while(a<3){ const o=sc.stream[k++]; reads++; if(o.ok){ exp.push(o.v); done=true; break; } a++; } if(!done) exp.push("FAIL"); }
+    return checkDisplay(w,exp,reads,i=>"Точка №"+(i+1));
+  }
+},
+/* ---------- Розділ 6. Файли ---------- */
+{
+  id:"st-19", ch:6, scene:"files", title:"Журнал зміни", topic:"open · for line in f · close",
+  brief:"Пульт лінії записує події зміни у файл <code>shift.log</code>, по одній на рядок. Начальник зміни хоче знати, скільки разів за зміну спрацювала тривога.",
+  task:["Відкрий файл для читання: <code>f = open(\"shift.log\")</code>. Тепер змінна <code>f</code> означає відкритий файл.", "Перебери рядки файлу циклом <code>for line in f:</code>. На кожному повторі в змінній <code>line</code> лежить наступний рядок, наприклад <code>\"08:40 ALARM\\n\"</code>. Знак <code>\\n</code> у кінці означає перенесення рядка.", "Порахуй рядки, у яких є слово <code>ALARM</code> («тривога»). Чи є слово в рядку, перевіряє умова <code>if \"ALARM\" in line:</code>. Лічильник <code>count</code> створи ще до циклу й дай йому значення 0.", "Після циклу закрий файл: <code>f.close()</code>.", "Покажи результат на табло: <code>display.show(count)</code>."],
+  api:[["open(\"shift.log\")", "відкриває файл для читання й повертає об'єкт файлу", "англ. <i>open</i> — «відкрити»"], ["for line in f:", "по черзі бере кожен рядок файлу", "англ. <i>line</i> — «рядок»"], ["\"ALARM\" in line", "True, якщо в рядку line є текст ALARM", "англ. <i>alarm</i> — «тривога»"], ["f.close()", "закриває файл", "англ. <i>close</i> — «закрити»"], ["display.show(значення)", "показує значення на табло", "англ. <i>display show</i> — «показати на табло»"]],
+  starter:`f = open("shift.log")
+for line in f:
+    print(line)
+f.close()
+
+# порахуй рядки з ALARM і покажи число на табло
+`,
+  solution:`f = open("shift.log")
+count = 0
+for line in f:
+    if "ALARM" in line:
+        count += 1
+f.close()
+display.show(count)
+`,
+  hints:["Запусти заготовку й подивись у консоль: між рядками з'являються порожні, бо кожен рядок файлу вже закінчується на <code>\\n</code>, а <code>print</code> додає ще один.","Лічильник: <code>count = 0</code> перед циклом, а в циклі <code>if \"ALARM\" in line:</code> і з відступом <code>count += 1</code>.","<code>display.show(count)</code> пиши після циклу, без відступу. Інакше табло показуватиме значення на кожному рядку."],
+  count:4,
+  gen(r,i){
+    const ev=["OK","OK","OK","START","STOP","ALARM","ALARM"];
+    const n=ri(r,9,12), lines=[]; let h=8, m=0;
+    for(let k=0;k<n;k++){ m+=ri(r,5,40); h+=Math.floor(m/60); m%=60; lines.push(String(h).padStart(2,"0")+":"+String(m).padStart(2,"0")+" "+(k===0?"START":pick(r,ev))); }
+    if(i===2) for(let k=1;k<n;k++) if(lines[k].endsWith("ALARM")) lines[k]=lines[k].slice(0,6)+"OK";
+    return {files:{"shift.log":textOf(lines)},inputs:["shift.log"],outputs:[],n:1,alarms:lines.filter(s=>s.includes("ALARM")).length};
+  },
+  label:sc=>"тривог: "+sc.alarms,
+  world:sc=>new FileWorld(sc),
+  prelude:()=>DISPLAY_PRELUDE+FILE_PRELUDE,
+  check(w,sc){
+    const c=checkClosed(w); if(c) return c;
+    if(!w.handles.length) return FAIL("Файл shift.log так і не відкрито.");
+    if(!w.shown.length) return FAIL("На табло нічого не показано. Після циклу потрібен display.show(count).");
+    if(w.shown.length>1) return FAIL("Табло показало "+w.shown.length+" значень, а має одне. Мабуть, display.show стоїть усередині циклу.");
+    if(w.shown[0]!==sc.alarms) return FAIL("На табло "+fmtVal(w.shown[0])+", а тривог у файлі "+sc.alarms+".");
+    return OK("Тривог за зміну: "+sc.alarms+".");
+  }
+},
+{
+  id:"st-20", ch:6, scene:"files", title:"Накладна", topic:"strip() · split() · int()",
+  brief:"Склад надіслав накладну <code>invoice.txt</code>. У кожному її рядку записано кількість і назву деталей через крапку з комою. Треба порахувати, скільки всього прийшло деталей одного виду.",
+  task:["Рядок накладної має вигляд <code>12;болт</code>: спершу кількість, потім назва. Назву деталей, які треба порахувати, вже записано в змінну <code>item</code> («позиція»), наприклад <code>\"болт\"</code>.", "Відкрий <code>invoice.txt</code> і перебери рядки так само, як на попередній станції. Суму <code>total</code> створи до циклу й дай їй значення 0.", "Кожен рядок спершу очисть: <code>line = line.strip()</code>. Метод <code>strip()</code> («обрізати») прибирає пробіли й <code>\\n</code> з обох країв рядка. Без цього назва буде <code>\"болт\\n\"</code>, і порівняння з <code>\"болт\"</code> не спрацює.", "Потім розділи рядок за крапкою з комою: <code>parts = line.split(\";\")</code>. Метод <code>split</code> («розділити») повертає список. Для рядка <code>\"12;болт\"</code> це <code>[\"12\", \"болт\"]</code>, тож кількість лежить у <code>parts[0]</code>, а назва — у <code>parts[1]</code>.", "Якщо назва дорівнює <code>item</code>, додай кількість до суми. Кількість поки що текст <code>\"12\"</code>, тому спершу перетвори її на число: <code>total += int(parts[0])</code>.", "Після циклу закрий файл і покажи суму на табло: <code>display.show(total)</code>."],
+  api:[["item", "назва деталей, які треба порахувати", "англ. <i>item</i> — «позиція, предмет»"], ["line.strip()", "той самий рядок без пробілів і \\n на краях", "англ. <i>strip</i> — «обрізати»"], ["line.split(\";\")", "ділить рядок за ; і повертає список частин", "англ. <i>split</i> — «розділити»"], ["parts[0]", "перший елемент списку, parts[1] — другий", "нумерація з нуля"], ["int(\"12\")", "перетворює текст на ціле число 12", "англ. <i>integer</i> — «ціле число»"], ["display.show(значення)", "показує значення на табло", "англ. <i>display show</i> — «показати на табло»"]],
+  starter:`print("Рахуємо:", item)
+
+f = open("invoice.txt")
+for line in f:
+    parts = line.split(";")
+    print(parts)
+f.close()
+`,
+  solution:`f = open("invoice.txt")
+total = 0
+for line in f:
+    line = line.strip()
+    parts = line.split(";")
+    if parts[1] == item:
+        total += int(parts[0])
+f.close()
+display.show(total)
+`,
+  hints:["Запусти заготовку: у консолі видно, що друга частина кожного рядка закінчується на <code>\\n</code>. Саме його прибирає <code>strip()</code>.","Порядок у циклі такий: <code>strip</code>, потім <code>split</code>, потім перевірка <code>if parts[1] == item:</code>.","Не забудь <code>int()</code>: <code>\"12\" + \"5\"</code> дає рядок <code>\"125\"</code>, а <code>12 + 5</code> дає число 17."],
+  count:4,
+  gen(r,i){
+    const names=["болт","гайка","шайба","гвинт"], item=[names[0],names[1],names[2],pick(r,names)][i];
+    const n=ri(r,8,11), lines=[];
+    for(let k=0;k<n;k++) lines.push(ri(r,2,40)+";"+pick(r,names));
+    const ix=shuffle(r,[...Array(n).keys()]); lines[ix[0]]=ri(r,2,40)+";"+item; lines[ix[1]]=ri(r,2,40)+";"+item;
+    const total=lines.filter(s=>s.split(";")[1]===item).reduce((a,s)=>a+ +s.split(";")[0],0);
+    return {files:{"invoice.txt":textOf(lines)},inputs:["invoice.txt"],outputs:[],n:1,vars:{item},total};
+  },
+  label:sc=>sc.vars.item+": "+sc.total,
+  world:sc=>new FileWorld(sc),
+  prelude:sc=>varsPrelude(sc.vars)+DISPLAY_PRELUDE+FILE_PRELUDE,
+  check(w,sc){
+    const c=checkClosed(w); if(c) return c;
+    if(!w.shown.length) return FAIL("На табло нічого не показано. Після циклу потрібен display.show(total).");
+    if(w.shown.length>1) return FAIL("Табло показало "+w.shown.length+" значень, а має одне. Мабуть, display.show стоїть усередині циклу.");
+    const g=w.shown[0];
+    if(g===0) return FAIL("На табло 0, а має бути "+sc.total+". Схоже, порівняння з item жодного разу не спрацювало. Перевір, чи прибираєш ти \\n через strip().");
+    if(typeof g==="string") return FAIL("На табло рядок "+fmtVal(g)+", а має бути число "+sc.total+". Кількість треба перетворити через int().");
+    if(g!==sc.total) return FAIL("На табло "+g+", а деталей «"+sc.vars.item+"» у накладній "+sc.total+".");
+    return OK("Деталей «"+sc.vars.item+"»: "+sc.total+".");
+  }
+},
+{
+  id:"st-21", ch:6, scene:"files", title:"Звіт верстата", topic:"open(…, \"w\") · write()",
+  brief:"Верстат закінчив зміну. Тепер звіт треба зберегти у файл <code>report.txt</code>, щоб його прочитав технолог. Від учорашньої зміни там лишився старий звіт, і його слід замінити новим.",
+  task:["У списку <code>jobs</code> лежать назви деталей, а в списку <code>results</code> на тих самих місцях записано результати: <code>\"ok\"</code> або <code>\"fail\"</code>. Тобто результат для <code>jobs[0]</code> — це <code>results[0]</code>, для <code>jobs[1]</code> — <code>results[1]</code> і так далі.", "Відкрий файл для запису: <code>f = open(\"report.txt\", \"w\")</code>. Режим <code>\"w\"</code> (<i>write</i> — «писати») починає файл з чистого аркуша: старий вміст зникає одразу після відкриття.", "Перший рядок звіту — заголовок. Запиши його так: <code>f.write(\"Звіт верстата\\n\")</code>. Метод <code>write</code> сам рядок не переносить, тому <code>\\n</code> у кінці кожного рядка треба дописувати самому.", "Далі для кожного завдання запиши рядок у форматі <code>назва: результат</code>, наприклад <code>вал: ok</code>. Перебирай номери так: <code>for i in range(len(jobs)):</code>. Тоді назва — це <code>jobs[i]</code>, а результат — <code>results[i]</code>. Рядок для запису збирають додаванням: <code>jobs[i] + \": \" + results[i] + \"\\n\"</code>.", "Останній рядок звіту — <code>Усього завдань: 5</code>, де замість 5 стоїть довжина списку, <code>len(jobs)</code>. <code>write</code> приймає лише текст, тому число перетвори на рядок: <code>str(len(jobs))</code>.", "Наприкінці закрий файл: <code>f.close()</code>. Поки файл відкритий, записаний текст чекає в буфері, і перевірка побачить файл порожнім."],
+  api:[["jobs, results", "назви деталей і результати на тих самих місцях", "англ. <i>jobs</i> — «завдання»; <i>results</i> — «результати»"], ["open(\"report.txt\", \"w\")", "відкриває файл для запису; старий вміст зникає", "англ. <i>write</i> — «писати»"], ["f.write(текст)", "записує текст у файл; \\n не додає", "англ. <i>write</i> — «писати»"], ["len(jobs)", "кількість елементів у списку", "англ. <i>length</i> — «довжина»"], ["str(5)", "перетворює число на рядок \"5\"", "англ. <i>string</i> — «рядок»"], ["f.close()", "закриває файл і зберігає записане", "англ. <i>close</i> — «закрити»"]],
+  starter:`print(jobs)
+print(results)
+
+f = open("report.txt", "w")
+f.write("Звіт верстата\\n")
+# рядки «назва: результат» для кожного завдання
+# останній рядок: «Усього завдань: N»
+`,
+  solution:`f = open("report.txt", "w")
+f.write("Звіт верстата\\n")
+for i in range(len(jobs)):
+    f.write(jobs[i] + ": " + results[i] + "\\n")
+f.write("Усього завдань: " + str(len(jobs)) + "\\n")
+f.close()
+`,
+  hints:["Запусти заготовку. Файл лишився відкритим, тому заголовок не потрапив у звіт. Допиши в кінці <code>f.close()</code> і запусти ще раз.","У циклі один рядок: <code>f.write(jobs[i] + \": \" + results[i] + \"\\n\")</code>. Зверни увагу на пробіл після двокрапки.","Останній рядок: <code>f.write(\"Усього завдань: \" + str(len(jobs)) + \"\\n\")</code>. Без <code>str()</code> Python не зможе додати число до тексту."],
+  count:4,
+  gen(r,i){
+    const names=shuffle(r,["вал","шестерня","кронштейн","фланець","втулка","кришка","муфта","корпус"]);
+    const n=[4,6,5,ri(r,3,6)][i], jobs=names.slice(0,n), results=jobs.map(()=>pick(r,["ok","ok","ok","fail"]));
+    if(i===0) results[1]="fail";
+    return {files:{"report.txt":"Звіт за вчора\nвал: ok\nУсього завдань: 1\n"},inputs:[],outputs:["report.txt"],n:0,vars:{jobs,results}};
+  },
+  label:sc=>sc.vars.jobs.length+" завдань",
+  world:sc=>new FileWorld(sc),
+  prelude:sc=>varsPrelude(sc.vars)+FILE_PRELUDE,
+  check(w,sc){
+    const {jobs,results}=sc.vars;
+    if(w.files["report.txt"]&&w.files["report.txt"].startsWith("Звіт за вчора")&&!w.handles.some(h=>h.name==="report.txt"&&h.mode==="w")) return FAIL("У файлі лишився вчорашній звіт. Відкрий report.txt у режимі \"w\", щоб почати з чистого аркуша.");
+    const bad=checkFileText(w,"report.txt",["Звіт верстата"].concat(jobs.map((j,k)=>j+": "+results[k]),["Усього завдань: "+jobs.length]));
+    if(bad) return bad;
+    return checkClosed(w)||OK("Звіт на "+(jobs.length+2)+" рядків збережено.");
+  }
+},
+{
+  id:"st-22", ch:6, scene:"files", title:"Журнал без втрат", topic:"режим \"a\" · with",
+  brief:"У файлі <code>log.txt</code> зберігається журнал подій лінії за кілька днів. Нові події треба дописати в кінець журналу так, щоб усі старі записи лишилися на місці.",
+  task:["Нові події лежать у списку <code>events</code>, наприклад <code>[\"12:05 START\", \"12:40 ALARM\"]</code>. Кожну подію треба дописати окремим рядком у кінець файлу <code>log.txt</code>.", "Режим <code>\"w\"</code> тут не годиться, бо він стер би всі старі записи. Потрібен режим <code>\"a\"</code> (<i>append</i> — «дописати»): він залишає вміст файлу й додає новий текст у кінець.", "Відкрий файл через <code>with</code>: <code>with open(\"log.txt\", \"a\") as f:</code>. Усе, що пишеш у файл, розміщуй у блоці з відступом під цим рядком. Коли блок закінчиться, Python сам закриє файл, тож <code>f.close()</code> писати не треба.", "Усередині блоку перебери події (<code>for e in events:</code>) і запиши кожну окремим рядком: <code>f.write(e + \"\\n\")</code>."],
+  api:[["events", "список нових подій", "англ. <i>events</i> — «події»"], ["open(\"log.txt\", \"a\")", "відкриває файл для дописування в кінець", "англ. <i>append</i> — «дописати»"], ["with open(…) as f:", "відкриває файл і сам закриває його після блоку", "англ. <i>with</i> — «з»; <i>as</i> — «як»"], ["f.write(текст)", "записує текст у файл; \\n не додає", "англ. <i>write</i> — «писати»"]],
+  starter:`print("Нові події:", events)
+
+f = open("log.txt", "w")
+for e in events:
+    f.write(e + "\\n")
+f.close()
+`,
+  solution:`with open("log.txt", "a") as f:
+    for e in events:
+        f.write(e + "\\n")
+`,
+  hints:["Запусти заготовку й подивись на файл у сцені: режим <code>\"w\"</code> стер журнал за попередні дні.","Перший рядок: <code>with open(\"log.txt\", \"a\") as f:</code>. Цикл <code>for</code> пиши всередині цього блоку, з відступом.","Рядок <code>f.close()</code> більше не потрібен: <code>with</code> закриває файл сам, щойно закінчиться його блок."],
+  count:4,
+  gen(r,i){
+    const ev=["START","OK","OK","ALARM","STOP"];
+    const mk=(h,n)=>{ const out=[]; let m=0; for(let k=0;k<n;k++){ m+=ri(r,7,25); out.push(String(h+Math.floor(m/60)).padStart(2,"0")+":"+String(m%60).padStart(2,"0")+" "+pick(r,ev)); } return out; };
+    const old=["--- 27.10 ---"].concat(mk(8,3),["--- 28.10 ---"],mk(9,ri(r,2,3)));
+    const events=mk(12,[3,4,2,ri(r,2,5)][i]);
+    return {files:{"log.txt":textOf(old)},inputs:[],outputs:["log.txt"],n:0,vars:{events},old};
+  },
+  label:sc=>"нових подій: "+sc.vars.events.length,
+  world:sc=>new FileWorld(sc),
+  prelude:sc=>varsPrelude(sc.vars)+FILE_PRELUDE,
+  check(w,sc){
+    if(w.handles.some(h=>h.name==="log.txt"&&h.mode==="w")) return FAIL("Файл відкрито в режимі \"w\", і старі записи журналу зникли. Для дописування в кінець потрібен режим \"a\".");
+    const bad=checkFileText(w,"log.txt",sc.old.concat(sc.vars.events)); if(bad) return bad;
+    const c=checkClosed(w); if(c) return c;
+    if(w.handles.some(h=>!h.viaWith)) return FAIL("Записи на місці, але файл закрито вручну через close(). На цій станції відкрий його через with open(\"log.txt\", \"a\") as f:.");
+    return OK("Дописано подій: "+sc.vars.events.length+", старі записи цілі.");
+  }
+},
+{
+  id:"st-23", ch:6, scene:"files", title:"Зламані накладні", topic:"FileNotFoundError · ValueError",
+  brief:"Склад щодня надсилає накладну з кількостями деталей: <code>day1.txt</code>, <code>day2.txt</code> і так далі. Деяких файлів бракує, а в деяких рядках замість числа трапляється сміття. Програма має порахувати все, що вдасться, і не впасти.",
+  task:["Назви файлів лежать у списку <code>days</code>. Перебери їх циклом <code>for name in days:</code>. Для кожного файлу на табло має з'явитися рівно одне значення.", "У кожному рядку накладної записано одне число — кількість деталей. Склади всі числа файлу й покажи суму: <code>display.show(total)</code>. Суму <code>total</code> обнуляй окремо для кожного файлу.", "Якщо файлу немає, <code>open(name)</code> кидає <code>FileNotFoundError</code> («файл не знайдено»). Перехопи цей виняток і покажи на табло <code>\"NO FILE\"</code>. Програма має перейти до наступного файлу.", "Якщо в рядку не число, наприклад <code>x7</code>, то <code>int(line)</code> кидає <code>ValueError</code>. Такий рядок просто пропусти: перехопи <code>ValueError</code> і напиши <code>continue</code>. Решту чисел цього файлу все одно треба скласти.", "Кожен файл відкривай через <code>with open(name) as f:</code>. Тоді він закриється сам, навіть якщо всередині станеться помилка."],
+  api:[["days", "список назв файлів-накладних", "англ. <i>days</i> — «дні»"], ["with open(name) as f:", "відкриває файл і сам закриває його після блоку", "англ. <i>with</i> — «з»"], ["int(line)", "число з рядка; для \"x7\" кидає ValueError", "англ. <i>value error</i> — «помилка значення»"], ["FileNotFoundError", "виняток, коли файлу немає", "англ. <i>file not found</i> — «файл не знайдено»"], ["display.show(значення)", "показує значення на табло", "англ. <i>display show</i> — «показати на табло»"]],
+  starter:`print("Накладні:", days)
+
+for name in days:
+    with open(name) as f:
+        total = 0
+        for line in f:
+            total += int(line)
+    display.show(total)
+`,
+  solution:`for name in days:
+    try:
+        with open(name) as f:
+            total = 0
+            for line in f:
+                try:
+                    total += int(line)
+                except ValueError:
+                    continue
+        display.show(total)
+    except FileNotFoundError:
+        display.show("NO FILE")
+`,
+  hints:["Тут два різні винятки в різних місцях. <code>FileNotFoundError</code> виникає на рядку з <code>open</code>, а <code>ValueError</code> — на рядку з <code>int</code>. Тому потрібні два окремі <code>try</code>.","Внутрішній <code>try</code> огортає лише <code>total += int(line)</code>, а його <code>except ValueError:</code> містить <code>continue</code>.","Зовнішній <code>try</code> огортає весь <code>with</code> разом із <code>display.show(total)</code>. Його <code>except FileNotFoundError:</code> показує <code>\"NO FILE\"</code>."],
+  count:4,
+  gen(r,i){
+    const n=[4,5,4,ri(r,3,5)][i], days=[], files={}, exp=[], miss=new Set();
+    miss.add(ri(r,1,n-1)); if(r()<.4) miss.add(ri(r,0,n-1));
+    for(let d=0;d<n;d++){
+      const name="day"+(d+1)+".txt"; days.push(name);
+      if(miss.has(d)){ exp.push("NO FILE"); continue; }
+      const k=ri(r,3,5), lines=[]; let t=0;
+      for(let j=0;j<k;j++){ if(r()<.2||(d===0&&j===1&&i<3)) lines.push(pick(r,["x7","--","1O","N/A"])); else { const v=ri(r,1,30); t+=v; lines.push(String(v)); } }
+      files[name]=textOf(lines); exp.push(t);
+    }
+    return {files,inputs:days,outputs:[],n,vars:{days},exp};
+  },
+  label:sc=>sc.vars.days.length+" файлів, бракує "+sc.exp.filter(e=>e==="NO FILE").length,
+  world:sc=>new FileWorld(sc),
+  prelude:sc=>varsPrelude(sc.vars)+DISPLAY_PRELUDE+FILE_PRELUDE,
+  check(w,sc){
+    for(let k=0;k<Math.max(sc.exp.length,w.shown.length);k++){
+      const e=sc.exp[k], g=w.shown[k];
+      if(g===undefined) return FAIL("На табло показано значень: "+w.shown.length+" із "+sc.exp.length+". Для "+sc.vars.days[k]+" мало бути "+fmtVal(e)+".");
+      if(e===undefined) return FAIL("На табло з'явилося зайве значення "+fmtVal(g)+". Для кожного файлу — рівно одне.");
+      if(g!==e) return FAIL(sc.vars.days[k]+": очікувалося "+fmtVal(e)+", а показано "+fmtVal(g)+"."+(e!=="NO FILE"&&typeof g==="number"&&g<e?" Схоже, після рядка зі сміттям решту чисел файлу не пораховано.":""));
+    }
+    const c=checkClosed(w); if(c) return c;
+    if(w.handles.some(h=>!h.viaWith)) return FAIL("Значення правильні, але файли закрито вручну. Відкривай кожен файл через with open(name) as f:.");
+    return OK("Опрацьовано накладних: "+sc.exp.filter(e=>e!=="NO FILE").length+" з "+sc.exp.length+".");
+  }
+},
+/* ---------- Розділ 7. Фінал ---------- */
+{
+  id:"st-24", ch:7, scene:"belt", title:"Міні-завод", topic:"усе разом",
   brief:"На фінальній лінії кожна деталь має QR-код із класом якості. Сканер читає код, а якщо маркування брудне, кидає <code>ScanError</code>. Перегріта деталь, як і раніше, зупиняє лінію.",
   task:["Перебирай деталі на стрічці: <code>for part in conveyor:</code>. Для кожної деталі по черзі зроби три кроки.", "Перший крок. Якщо деталь перегріта (<code>part.hot</code> дорівнює <code>True</code>), виклич <code>emergency_stop()</code> і вийди з циклу командою <code>break</code>.", "Другий крок. Відскануй QR-код: <code>code = scanner.scan(part)</code> (<i>scanner</i> — «сканер», <i>scan</i> — «сканувати»). Сканер повертає клас якості, рядок <code>\"A\"</code>, <code>\"B\"</code> або <code>\"C\"</code>.", "Якщо маркування брудне, замість коду виникає помилка <code>ScanError</code> («помилка сканування»). Тоді відправ деталь у брак командою <code>reject()</code> («відхилити») і переходь до наступної деталі через <code>continue</code>.", "Третій крок. Розсортуй деталь за кодом. <code>\"A\"</code> іде в лівий контейнер (<code>push_left()</code>), <code>\"B\"</code> — у правий (<code>push_right()</code>), а <code>\"C\"</code> — у брак (<code>reject()</code>)."],
   api:[["part.hot", "True, якщо деталь перегріта", "англ. <i>hot</i> — «гарячий»"], ["scanner.scan(part)", "повертає \"A\", \"B\" або \"C\"; іноді виникає ScanError", "англ. <i>scan</i> — «сканувати»"], ["push_left()", "штовхає деталь у лівий контейнер (клас A)", "англ. <i>push left</i> — «штовхнути ліворуч»"], ["push_right()", "штовхає деталь у правий контейнер (клас B)", "англ. <i>push right</i> — «штовхнути праворуч»"], ["reject()", "відправляє деталь у брак", "англ. <i>reject</i> — «відхилити»"], ["emergency_stop()", "аварійно зупиняє лінію", "англ. <i>emergency stop</i> — «аварійна зупинка»"]],
@@ -805,6 +1344,65 @@ for job in jobs:
   world:sc=>new BeltWorld(sc),
   prelude:()=>BELT_PRELUDE+`class _Scanner:\n    def scan(self, part):\n        return _c("scan", part.id)\nscanner = _Scanner()\ndef push_left():\n    _c("act", "left")\ndef push_right():\n    _c("act", "right")\ndef reject():\n    _c("act", "end")\ndef emergency_stop():\n    _c("stop")\n`,
   check(w){ return checkBelt(w,this,expUntilHot(p=>p.dirty?"end":p.code==="A"?"left":p.code==="B"?"right":"end")); }
+},
+{
+  id:"st-25", ch:7, scene:"files", title:"Нічний звіт", topic:"функції · файли · винятки",
+  brief:"Уночі датчик температури записує заміри у файл <code>night.txt</code>, по одному на рядок. Коли зв'язок зривається, замість числа в рядку стоїть <code>ERR</code>. Зранку технолог хоче отримати готовий звіт <code>report.txt</code>, де біля кожного заміру написано, чи він у нормі.",
+  task:["Напиши функцію <code>status(t)</code>. Вона отримує температуру й повертає рядок: <code>\"LOW\"</code> («низька»), якщо <code>t</code> менша за 18, <code>\"HIGH\"</code> («висока»), якщо <code>t</code> більша за 26, і <code>\"OK\"</code> в усіх інших випадках.", "Відкрий <code>night.txt</code> для читання, а <code>report.txt</code> для запису. Обидва файли відкривай через <code>with</code>; другий <code>with</code> можна вкласти в перший.", "Для кожного рядка з <code>night.txt</code> спробуй отримати дробове число: <code>t = float(line)</code>.", "Якщо вийшло, запиши у звіт рядок у форматі <code>22.5 OK</code>: число, пробіл і те, що повернула <code>status(t)</code>. Збери його так: <code>str(t) + \" \" + status(t) + \"\\n\"</code>.", "Якщо <code>float(line)</code> кинула <code>ValueError</code>, запиши у звіт рядок <code>ERR</code> і переходь до наступного заміру.", "Останнім рядком звіту запиши, скільки замірів у нормі, наприклад <code>OK: 7</code>. Рахуй для цього, скільки разів <code>status(t)</code> повернула <code>\"OK\"</code>."],
+  api:[["def status(t):", "повертає \"LOW\", \"HIGH\" або \"OK\"", "англ. <i>status</i> — «стан»"], ["float(line)", "дробове число з рядка; для \"ERR\" кидає ValueError", "англ. <i>float</i> — «число з плаваючою комою»"], ["with open(…) as f:", "відкриває файл і сам закриває його після блоку", "англ. <i>with</i> — «з»"], ["open(\"report.txt\", \"w\")", "відкриває файл для запису", "англ. <i>write</i> — «писати»"], ["f.write(текст)", "записує текст у файл; \\n не додає", "англ. <i>write</i> — «писати»"], ["str(t)", "перетворює число на рядок", "англ. <i>string</i> — «рядок»"]],
+  starter:`def status(t):
+    # "LOW" — нижче 18, "HIGH" — вище 26, інакше "OK"
+    pass
+
+with open("night.txt") as src:
+    with open("report.txt", "w") as out:
+        for line in src:
+            print(line.strip())
+`,
+  solution:`def status(t):
+    if t < 18:
+        return "LOW"
+    elif t > 26:
+        return "HIGH"
+    return "OK"
+
+count = 0
+with open("night.txt") as src:
+    with open("report.txt", "w") as out:
+        for line in src:
+            try:
+                t = float(line)
+            except ValueError:
+                out.write("ERR\\n")
+                continue
+            s = status(t)
+            if s == "OK":
+                count += 1
+            out.write(str(t) + " " + s + "\\n")
+        out.write("OK: " + str(count) + "\\n")
+`,
+  hints:["Почни з функції: три гілки, у кожній свій <code>return</code>. Межі 18 і 26 входять у норму.","У циклі: <code>try</code> з <code>float(line)</code>, у <code>except ValueError:</code> запиши <code>\"ERR\\n\"</code> і напиши <code>continue</code>. Нижче, вже після <code>try</code>, виклич <code>status(t)</code> і запиши рядок.","Лічильник <code>count = 0</code> створи до відкриття файлів. Рядок <code>OK: …</code> пиши після циклу, але ще всередині блоку <code>with</code> для <code>report.txt</code>: після блоку файл уже закрито."],
+  needFn:["status"],
+  count:4,
+  gen(r,i){
+    const n=ri(r,8,11), vals=[];
+    const one=()=>{ let v=Math.round((14+r()*16)*10)/10; if(Math.round(v*10)%10===0) v=Math.round((v+.3)*10)/10; return v; };
+    for(let k=0;k<n;k++) vals.push(r()<.15?"ERR":one());
+    const ix=shuffle(r,[...Array(n).keys()]);
+    if(i<3){ vals[ix[0]]="ERR"; vals[ix[1]]=17.9; vals[ix[2]]=26.1; vals[ix[3]]=21.4; }
+    const st=t=>t<18?"LOW":t>26?"HIGH":"OK";
+    const rep=vals.map(v=>v==="ERR"?"ERR":String(v)+" "+st(v));
+    rep.push("OK: "+vals.filter(v=>v!=="ERR"&&st(v)==="OK").length);
+    return {files:{"night.txt":textOf(vals.map(String))},inputs:["night.txt"],outputs:["report.txt"],n:0,rep};
+  },
+  label:sc=>(sc.rep.length-1)+" замірів, "+sc.rep[sc.rep.length-1],
+  world:sc=>new FileWorld(sc),
+  prelude:()=>FILE_PRELUDE,
+  check(w,sc){
+    const bad=checkFileText(w,"report.txt",sc.rep); if(bad) return bad;
+    const c=checkClosed(w); if(c) return c;
+    return OK("Звіт готовий: "+sc.rep[sc.rep.length-1]+".");
+  }
 }
 ];
 LEVELS.forEach((l,i)=>{ l.n=i+1; l.par=l.solution.split("\n").filter(s=>s.trim()&&!s.trim().startsWith("#")&&!s.trim().startsWith("print")).length; });
@@ -818,7 +1416,7 @@ function makeScenarios(lv,fresh){
 }
 
 /* ================= Запуск Python (Skulpt) ================= */
-let _added=[];
+let _added=[], _saved={};
 function skRead(f){ if(Sk.builtinFiles===undefined||Sk.builtinFiles.files[f]===undefined) throw "File not found: '"+f+"'"; return Sk.builtinFiles.files[f]; }
 const ERR_UA={
   SyntaxError:["Синтаксична помилка","Перевір двокрапку в кінці рядків з if, elif, else, for, while, try, except, відступи (4 пробіли всередині блоку) і чи всі дужки та лапки закриті."],
@@ -836,8 +1434,12 @@ const ERR_UA={
   SensorError:["Неперехоплений SensorError","Програма впала через збій датчика. Огорни виклик sensor.read() у try / except SensorError."],
   OverheatError:["Неперехоплений OverheatError","Мотор перегрівся, а програма цього не обробила. Потрібен except OverheatError."],
   JamError:["Неперехоплений JamError","Деталь застрягла, а програма цього не обробила. Потрібен except JamError."],
-  ScanError:["Неперехоплений ScanError","Сканер не прочитав код, а програма цього не обробила. Потрібен try / except ScanError."]
+  ScanError:["Неперехоплений ScanError","Сканер не прочитав код, а програма цього не обробила. Потрібен try / except ScanError."],
+  FileNotFoundError:["Файл не знайдено","Перевір назву файлу. Якщо файлу справді може не бути, обробляй це через try / except FileNotFoundError."],
+  IOError:["Помилка роботи з файлом",""]
 };
+const uaPlural=(n,a,b,c)=>{ const d=n%10, h=n%100; return d===1&&h!==11?a:d>=2&&d<=4&&(h<10||h>=20)?b:c; };
+const UA_MSG=["RobotError","SensorError","OverheatError","JamError","ScanError","_Halt","FileNotFoundError","IOError"];
 function formatErr(e){
   if(e instanceof WErr) e={tp$name:e.type,args:null,_m:e.msg};
   if(!e||!e.tp$name){ return {type:"Error",title:"Внутрішня помилка",msg:String(e),line:null,text:"Внутрішня помилка: "+e,short:"Помилка"}; }
@@ -849,9 +1451,14 @@ function formatErr(e){
   if(type==="NameError"){ const m=/name '([^']+)'/.exec(msg); if(m) title="Невідоме ім'я «"+m[1]+"»"; }
   if(type==="SyntaxError"&&/indent/i.test(msg)) [title,expl]=ERR_UA.IndentationError;
   if(type==="AttributeError"){ const m=/has no attribute '([^']+)'/.exec(msg); if(m) title="Немає атрибута «"+m[1]+"»"; }
-  const uaMsg = ["RobotError","SensorError","OverheatError","JamError","ScanError","_Halt"].includes(type) ? msg : "";
+  if(type==="TypeError"){ const m=/^(\w+)\(\) takes (\d+) positional arguments? but (\d+) (?:was|were)/.exec(msg); if(m){ title="Не та кількість аргументів"; expl="Функцію "+m[1]+"() викликано з "+m[3]+(+m[3]===1?" аргументом":" аргументами")+", а в її def "+m[2]+" "+uaPlural(+m[2],"параметр","параметри","параметрів")+". Звір рядок def з умовою завдання."; }
+    const m2=/^(\w+)\(\) missing (\d+) required/.exec(msg); if(m2){ title="Не та кількість аргументів"; expl="Функції "+m2[1]+"() не вистачило аргументів: у def параметрів більше, ніж передано у виклику. Звір рядок def з умовою завдання."; } }
+  if(type==="TypeError"&&/concatenate|unsupported operand type\(s\) for \+|must be str/.test(msg)){ title="Текст і число не додаються"; expl="Python не додає число до рядка. Перетвори число на текст через str(), а текст на число — через int() або float()."; }
+  if(/^(Файл|write\(\)|Назва файлу|Невідомий режим)/.test(msg)&&(type==="TypeError"||type==="ValueError")&&!expl){ expl=msg; msg=""; }
+  const uaMsg = UA_MSG.includes(type) ? msg : "";
   const where=line?" (рядок "+line+")":"";
-  const text=title+where+(uaMsg?": "+uaMsg:"")+(expl?" "+expl:"")+(uaMsg||type==="TimeLimitError"?"":(msg?" ["+type+": "+msg+"]":" ["+type+"]"));
+  msg=msg.replace(/\s+/g," ");
+  const text=title+where+(uaMsg?": "+uaMsg:"")+(expl?(uaMsg?" ":". ")+expl:"")+(uaMsg||type==="TimeLimitError"?"":(msg?" ["+type+": "+msg+"]":" ["+type+"]"));
   return {type,title,msg,line,text,short:title+(uaMsg?": "+uaMsg:"")};
 }
 async function runCode(lv,sc,code){
@@ -859,8 +1466,9 @@ async function runCode(lv,sc,code){
   let out="";
   Sk.configure({output:s=>{ out+=s; if(out.length>30000) out=out.slice(-30000); }, read:skRead, __future__:Sk.python3, execLimit:5000, yieldLimit:200});
   Sk.execLimit=5000;
-  for(const k of _added) delete Sk.builtins[k];
-  _added=[];
+  for(const k of _added){ if(k in _saved){ Sk.builtins[k]=_saved[k]; } else delete Sk.builtins[k]; }
+  _added=[]; _saved={};
+  const addBuiltin=(k,v)=>{ if(!_added.includes(k)){ if(k in Sk.builtins) _saved[k]=Sk.builtins[k]; _added.push(k); } Sk.builtins[k]=v; };
   Sk.builtins._js=new Sk.builtin.func(function(name,...args){
     name=Sk.ffi.remapToJs(name);
     const js=args.map(a=>Sk.ffi.remapToJs(a));
@@ -872,12 +1480,26 @@ async function runCode(lv,sc,code){
   let err=null;
   try{
     const mod=await Sk.misceval.asyncToPromise(()=>Sk.importMainWithBody("_lab",false,COMMON_PRELUDE+lv.prelude(sc),true));
-    for(const k in mod.$d){ if(k.indexOf("__")!==0){ Sk.builtins[k]=mod.$d[k]; _added.push(k); } }
+    for(const k in mod.$d){ if(k.indexOf("__")!==0) addBuiltin(k,mod.$d[k]); }
   }catch(e){ return {events:[],out,err:{text:"Помилка підготовки рівня: "+e},res:FAIL("Помилка підготовки рівня")}; }
   if(!code.trim()) err={type:"Empty",title:"Порожня програма",msg:"",line:null,text:"Програма порожня. Напиши код у редакторі.",short:"Порожня програма"};
   else{
-    try{ Sk.execStart=Date.now(); await Sk.misceval.asyncToPromise(()=>Sk.importMainWithBody("<stdin>",false,code,true)); }
-    catch(e){ err=formatErr(e); }
+    try{
+      Sk.execStart=Date.now();
+      const user=await Sk.misceval.asyncToPromise(()=>Sk.importMainWithBody("<stdin>",false,code,true));
+      for(const fn of (lv.needFn||[])){
+        const f=user.$d[fn];
+        if(!(f instanceof Sk.builtin.func)){
+          const t=f===undefined?"Функцію "+fn+"() не знайдено. Її треба визначити рядком def "+fn+"(…): і тілом з відступом під ним.":"Ім'я "+fn+" є, але це не функція. Визнач її через def "+fn+"(…):.";
+          throw {_noFn:true,title:"Немає функції «"+fn+"»",text:t};
+        }
+      }
+      if(lv.driver){
+        for(const k in user.$d){ if(k.indexOf("__")!==0) addBuiltin(k,user.$d[k]); }
+        await Sk.misceval.asyncToPromise(()=>Sk.importMainWithBody("<station>",false,lv.driver(sc),true));
+      }
+    }
+    catch(e){ err=e&&e._noFn?{type:"NoFunc",title:e.title,msg:"",line:null,text:e.text,short:e.title}:formatErr(e); }
   }
   world.finish(err);
   const res= err ? FAIL(err.text) : lv.check(world,sc,out);
@@ -885,4 +1507,5 @@ async function runCode(lv,sc,code){
   return {events:world.events,out,err,res,world};
 }
 const PLAIN_LEVEL={world:sc=>new World(sc),prelude:()=>"",check:()=>OK()};
-if(typeof module!=="undefined") module.exports={LEVELS,makeScenarios,runCode,PLAIN_LEVEL};
+const FILE_PLAIN_LEVEL={world:sc=>new FileWorld(sc),prelude:()=>FILE_PRELUDE,check:()=>OK()};
+if(typeof module!=="undefined") module.exports={LEVELS,makeScenarios,runCode,PLAIN_LEVEL,FILE_PLAIN_LEVEL};

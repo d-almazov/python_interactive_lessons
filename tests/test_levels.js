@@ -23,8 +23,12 @@ const { LEVELS, makeScenarios, runCode } = require(path.join(root, "js/core.js")
         }
       }
     }
+    // заготовка не має проходити станцію: інакше завдання розв'язане наперед
+    let starterOk=true;
+    for(const sc of makeScenarios(lv,false)){ const r=await runCode(lv,sc,lv.starter); if(!r.res.ok){ starterOk=false; break; } }
+    if(starterOk){ failed++; console.log(`✗ ${lv.id}: заготовка проходить усі сценарії`); }
     console.log(`${lv.id} ${lv.title}: ${runs} запусків`);
   }
   if (failed) { console.log(`\nПомилок: ${failed}`); process.exit(1); }
-  console.log("\nУсі еталонні розв'язки проходять.");
+  console.log("\nУсі еталонні розв'язки проходять, а заготовки — ні.");
 })();
